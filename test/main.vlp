@@ -1,11 +1,12 @@
 project HelloProgram {
-    archs = [current];
+    arch = ["current"];
     version = "latest_stable";
     format = vxe;
     entry = main;
 
-    rules {
+    ruleset {
         decline_vulpine_style_decl = false;
+        allow_c_style_decl = true;
     }
 }
 

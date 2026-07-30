@@ -129,7 +129,25 @@
     X(RightParentheses, ")")
 
 #define PROJECT_LIST \
-    X(Project, "project")
+    X(Project, "project") \
+    X(Version, "version") \
+    X(Arch, "arch") \
+    X(Entry, "entry") \
+    X(Publisher, "publisher") \
+    X(Output, "output") \
+    X(ABI, "abi") \
+    X(Optimization, "optimization") \
+    X(Ruleset, "ruleset") \
+    X(Format, "format") \
+    X(Linker, "linker")
+
+#define RULESET_LIST \
+    X(allow_c_style_decl, "allow_c_style_decl") \
+    X(decline_vulpine_style_decl, "decline_vulpine_style_decl") \
+    X(decline_syscalls, "decline_syscalls") \
+    X(decline_inline_languages, "decline_inline_languages") \
+    X(decline_vulpine_standard_library, "decline_vulpine_standard_library") \
+    X(decline_pointer_decleration, "decline_pointer_decleration")
 
 #define TOKEN_LIST \
     FLOW_LIST \
@@ -142,6 +160,7 @@
     COMPARATIVE_OPERATOR_LIST \
     PUNCTUATION_LIST \
     PROJECT_LIST \
+    RULESET_LIST \
     X(INVALID, "%INVALID%")
 
 enum class TokenType {

@@ -101,14 +101,15 @@ auto Parser::parseProjectDecl() -> std::unique_ptr<ProjectNode> {
 
     if (expect(TokenType::LeftBrace)) {
         while (!isAtEnd() && peek().type != TokenType::RightBrace) {
-            if (peek().type != TokenType::Identifier) {
-                consume(); continue; 
-            }
-            std::string_view key = consume().str;
+            // Grab the token type of the key directly
+            TokenType keyType = peek().type;
+            consume(); // consume key token
+
             expect(TokenType::Assign);
             
-            if (key == "version") {
-                if (peek().type == TokenType::String_Literal) {
+            if (keyType == TokenType::Version) {
+                // Accept either String_Literal or Identifier/Keyword as version string
+                if (peek().type == TokenType::String_Literal || peek().type == TokenType::Identifier) {
                     std::string_view rawStr = consume().str;
                     
                     // Strip leading/trailing quotes if present
@@ -117,13 +118,61 @@ auto Parser::parseProjectDecl() -> std::unique_ptr<ProjectNode> {
                     }
                     
                     node->setVulpineVersion(VulpineSettings::VulpineVersions::resolveVersionAlias(rawStr));
+                    std::cout << "Vulpine Version: " << node->getVulpineVersion() << "\n";
                 } else {
-                    std::cerr << "[ERROR]: Expected string literal for version.\n";
+                    std::cerr << "[ERROR]: Expected version string for key 'version'.\n";
                     return nullptr;
                 }
             }
-            // ... (rest of your keys)
-            else { consume(); } // Consume unknown keys to advance
+            else if (keyType == TokenType::Arch) {
+                // Parse architecture array or singular identifier/string
+                if (expect(TokenType::LeftBracket)) {
+                    while (!isAtEnd() && peek().type != TokenType::RightBracket) {
+                        node->addArchitecture(consume().str);
+                        std::cout << "Added Architecture: " << node->getArchitectures().back() << "\n";
+                        if (peek().type == TokenType::Comma) consume();
+                    }
+                    expect(TokenType::RightBracket);
+                } else {
+                    node->addArchitecture(consume().str);
+                    std::cout << "Added Architecture: " << node->getArchitectures().back() << "\n";
+                }
+            }
+            else if (keyType == TokenType::Entry) {
+                if (peek().type == TokenType::Identifier) {
+                    node->setEntryPoint(consume().str);
+                    std::cout << "Entry Point: " << node->getEntryPoint() << "\n";
+                } else {
+                    std::cerr << "[ERROR]: Expected valid function identifier for entry point.\n";
+                    return nullptr;
+                }
+            }
+            else if (keyType == TokenType::Ruleset) {
+                if (expect(TokenType::LeftBrace)) {
+                    while (!isAtEnd() && peek().type != TokenType::RightBrace) {
+                        auto ruleKey = consume();
+                        expect(TokenType::Assign);
+                        if (peek().type == TokenType::Bool || peek().type == TokenType::True || peek().type == TokenType::False) {
+                            bool ruleValue = (consume().type == TokenType::True);
+                            node->setRule(ruleKey.str, ruleValue);
+                            std::cout << "Rule: " << ruleKey.str << " = " << (ruleValue ? "true" : "false") << "\n";
+                        } else {
+                            consume(); // skip invalid value
+                        }
+                        expect(TokenType::Semicolon);
+                    }
+                    expect(TokenType::RightBrace);
+                }
+            }
+            else {
+                // Skip unknown value expressions to advance safely
+                if (!isAtEnd() && peek().type != TokenType::Semicolon) {
+                    consume();
+                }
+            }
+
+            // Consume trailing semicolon if present
+            expect(TokenType::Semicolon);
         }
         expect(TokenType::RightBrace);
     }
@@ -131,7 +180,7 @@ auto Parser::parseProjectDecl() -> std::unique_ptr<ProjectNode> {
     // Force validation result
     if (!VulpineSettings::VulpineVersions::isValidVersion(node->getVulpineVersion())) {
         std::cerr << "[ERROR]: Invalid version: " << node->getVulpineVersion() << '\n';
-        return nullptr; // Returning null here stops the loop
+        return nullptr;
     }
     return node;
 }
