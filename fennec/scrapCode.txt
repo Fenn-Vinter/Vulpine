@@ -1,0 +1,13 @@
+auto ProjectLoader::validateRuleset(ProjectNode* node) -> void {
+    bool allowC = node->isRuleEnabled(allow_c_style_decl);
+    bool declineV = node->isRuleEnabled(decline_vulpine_style_decl);
+
+    if (!allowC && declineV) {
+        // The "Hard Mode" easter egg
+        std::cout << "[Vulpine Warning]: Excuse me, you're kidding right? No variables?? "
+                  << "You've effectively disabled all standard declaration paths. "
+                  << "Good luck with your pure functional programming odyssey!" 
+                  << std::endl;
+    }
+}
+

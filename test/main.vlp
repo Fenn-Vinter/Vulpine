@@ -1,0 +1,19 @@
+project HelloProgram {
+    archs = [current];
+    version = "latest_stable";
+    format = vxe;
+    entry = main;
+
+    rules {
+        decline_vulpine_style_decl = false;
+    }
+}
+
+fn main() {
+    let x: int = 5;
+    let y: x = 3;
+
+    let z: uint = (x + y):uint;
+
+    return z + 10;
+}
