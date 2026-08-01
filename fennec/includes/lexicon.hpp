@@ -9,7 +9,7 @@
     X(I16, "i16") \
     X(I32, "i32") \
     X(I64, "i64") \
-    X(I128, "i128") \
+    X(I128, "i128")
 
 #define UINT_LIST \
     X(AutoUInt, "uauto") \
@@ -110,11 +110,12 @@
 #define LITERAL_LIST \
     X(Identifier, "%Identifier%") \
     X(Int_Literal, "%Int_Literal%") \
-    X(UInt_Literal, "%UInt_Literal%") \
-    X(Float_Literal, "%Float_Literal%") \
-    X(String_Literal, "%String_Literal%") \
-    X(Hex_Literal, "%Hex_Literal%") \
-    X(Binary_Literal, "%Binary_Literal%")
+    X(UInt_Literal, "\%UInt_Literal%") \
+    X(Float_Literal, "\%Float_Literal%") \
+    X(String_Literal, "\%String_Literal%") \
+    X(Char_Literal, "\%Char_Literal%") \
+    X(Hex_Literal, "\%Hex_Literal%") \
+    X(Binary_Literal, "\%Binary_Literal%")
 
 #define PUNCTUATION_LIST \
     X(Colon, ":") \
@@ -161,7 +162,8 @@
     PUNCTUATION_LIST \
     PROJECT_LIST \
     RULESET_LIST \
-    X(INVALID, "%INVALID%")
+    X(Eof, "EOF") \
+    X(Invalid, "%INVALID%")
 
 enum class TokenType {
     #define X(name, str) name,
@@ -174,7 +176,6 @@ inline const std::unordered_map<std::string_view, TokenType> StringToToken = {
     TOKEN_LIST
     #undef X
 };
-
 
 inline const std::unordered_map<TokenType, std::string_view> TokenToString = {
     #define X(name, str) {TokenType::name, str},
@@ -224,13 +225,43 @@ namespace TokenUtils {
     }
 
     inline auto isTypedef(TokenType t) -> bool {
-        return (isWildcard(t) || isFloat(t) || isUInt(t) || isInt(t) || t == TokenType::Bool || t == TokenType::String || t ==TokenType::Char);
+        return (isWildcard(t) || isFloat(t) || isUInt(t) || isInt(t) || t == TokenType::Bool || t == TokenType::String || t == TokenType::Char);
     }
 
     inline auto isOperator(TokenType t) -> bool {
         switch (t) {
             #define X(name, str) case TokenType::name:
             OPERATOR_LIST
+            #undef X
+                return true;
+            default: return false;
+        }
+    }
+
+    inline auto isComparativeOperator(TokenType t) -> bool {
+        switch (t) {
+            #define X(name, str) case TokenType::name:
+            COMPARATIVE_OPERATOR_LIST
+            #undef X
+                return true;
+            default: return false;
+        }
+    }
+
+    inline auto isUnaryOperator(TokenType t) -> bool {
+        switch (t) {
+            #define X(name, str) case TokenType::name:
+            UNARY_OPERATOR_LIST
+            #undef X
+                return true;
+            default: return false;
+        }
+    }
+
+    inline auto isLiteral(TokenType t) -> bool {
+        switch (t) {
+            #define X(name, str) case TokenType::name:
+            LITERAL_LIST
             #undef X
                 return true;
             default: return false;

@@ -1,8 +1,8 @@
 #pragma once
 #include <memory>
 
-#include <lexer.hpp>
-#include <parser.hpp>
+#include "lexer.hpp"
+#include "parser.hpp"
 
 class Fennec {
     public:

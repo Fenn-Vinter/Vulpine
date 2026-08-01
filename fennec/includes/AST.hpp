@@ -5,22 +5,27 @@
 #include <unordered_map>
 #include <vector>
 #include <utility>
-#include <lexicon.hpp>
+#include "lexicon.hpp"
 
-constexpr unsigned int NodeType_Base = 0x00;
-constexpr unsigned int NodeType_Variable = 0x01;
-constexpr unsigned int NodeType_If = 0x02;
-constexpr unsigned int NodeType_Function = 0x03;
-constexpr unsigned int NodeType_Literal = 0x04;
-constexpr unsigned int NodeType_BinaryOp = 0x05;
-constexpr unsigned int NodeType_UnaryOp = 0x06;
-constexpr unsigned int NodeType_Cast = 0x07;
+enum class NodeType : unsigned int {
+    Base = 0,
+    Variable,
+    VariableRef,
+    If,
+    Function,
+    Literal,
+    BinaryOp,
+    UnaryOp,
+    Cast,
+    Block,
+    Project
+};
 
 class BaseNode {
 public:
     BaseNode() = default;
     virtual ~BaseNode() = default;
-    virtual auto nodeType() const -> unsigned int { return NodeType_Base; }
+    virtual auto nodeType() const -> NodeType { return NodeType::Base; }
 };
 
 class VariableNode : public BaseNode {
@@ -28,7 +33,7 @@ public:
     // Fixed: Initializing member 'm_name' with parameter 'name'
     VariableNode(std::string name) : m_name(std::move(name)) {}
 
-    auto nodeType() const -> unsigned int override { return NodeType_Variable; }
+    auto nodeType() const -> NodeType override { return NodeType::Variable; }
     
     // Member accessors
     auto setName(const std::string& name) -> void { m_name = name; }
@@ -48,9 +53,21 @@ private:
     std::unique_ptr<BaseNode> m_value;
 };
 
+class VariableRefNode : public BaseNode {
+public:
+    VariableRefNode(std::string_view name) : m_name(name) {}
+
+    auto nodeType() const -> NodeType override { return NodeType::VariableRef; }
+
+    auto setName(const std::string_view& name) -> void { m_name = name; }
+    auto getName() const -> const std::string_view& { return m_name; }
+private:
+    std::string_view m_name;
+};
+
 class IfNode : public BaseNode {
 public:
-    auto nodeType() const -> unsigned int override { return NodeType_If; }
+    auto nodeType() const -> NodeType override { return NodeType::If; }
 
     auto setCondition(std::unique_ptr<BaseNode> cond) -> void { condition = std::move(cond); }
     auto getCondition() const -> BaseNode* { return condition.get(); }
@@ -65,13 +82,16 @@ private:
 
 class FunctionNode : public BaseNode {
 public:
-    auto nodeType() const -> unsigned int override { return NodeType_Function; }
+    auto nodeType() const -> NodeType override { return NodeType::Function; }
 
     auto setName(std::string name) -> void { this->name = std::move(name); }
     auto getName() const -> const std::string& { return name; }
 
     auto addParam(std::unique_ptr<VariableNode> param) -> void { params.push_back(std::move(param)); }
     auto addBodyNode(std::unique_ptr<BaseNode> node) -> void { body.push_back(std::move(node)); }
+
+    auto getBody() const -> const std::vector<std::unique_ptr<BaseNode>>& { return body; }
+    auto getParams() const -> const std::vector<std::unique_ptr<VariableNode>>& { return params; }
 
 private:
     std::string name;
@@ -83,7 +103,7 @@ private:
 class LiteralNode : public BaseNode {
 public:
     LiteralNode(std::string value) : value(std::move(value)) {}
-    auto nodeType() const -> unsigned int override { return NodeType_Literal; }
+    auto nodeType() const -> NodeType override { return NodeType::Literal; }
     auto getValue() const -> const std::string& { return value; }
 private:
     std::string value;
@@ -92,34 +112,36 @@ private:
 // BinaryOpNode: Handles math (+, -, *, /)
 class BinaryOpNode : public BaseNode {
 public:
-    BinaryOpNode(std::string op) : op(std::move(op)) {}
-    auto nodeType() const -> unsigned int override { return NodeType_BinaryOp; }
+    BinaryOpNode(TokenType op) : op(op) {}
+    auto nodeType() const -> NodeType override { return NodeType::BinaryOp; }
     
     auto setLeft(std::unique_ptr<BaseNode> n) { left = std::move(n); }
     auto setRight(std::unique_ptr<BaseNode> n) { right = std::move(n); }
 private:
-    std::string op;
-    std::unique_ptr<BaseNode> left;
-    std::unique_ptr<BaseNode> right;
+    TokenType op{TokenType::Invalid};
+    std::unique_ptr<BaseNode> left{nullptr};
+    std::unique_ptr<BaseNode> right{nullptr};
 };
 
 // UnaryOpNode: Handles pointers (&) and dereferences (*)
 class UnaryOpNode : public BaseNode {
 public:
-    UnaryOpNode(std::string op) : op(std::move(op)) {}
-    auto nodeType() const -> unsigned int override { return NodeType_UnaryOp; }
-    
+    UnaryOpNode(TokenType op) : op(op) {}
+    auto nodeType() const -> NodeType override { return NodeType::UnaryOp; }
     auto setOperand(std::unique_ptr<BaseNode> n) { operand = std::move(n); }
+    auto setIsPrefix(bool isPrefix) { this->isPrefix = isPrefix; }
+    auto getIsPrefix() const -> bool { return isPrefix; }
 private:
-    std::string op;
-    std::unique_ptr<BaseNode> operand;
+    TokenType op{TokenType::Invalid};
+    std::unique_ptr<BaseNode> operand{nullptr};
+    bool isPrefix{true}; // true for prefix, false for postfix
 };
 
 // CastNode: Handles type conversion
 class CastNode : public BaseNode {
 public:
     CastNode(std::string targetType) : targetType(std::move(targetType)) {}
-    auto nodeType() const -> unsigned int override { return NodeType_Cast; }
+    auto nodeType() const -> NodeType override { return NodeType::Cast; }
     
     auto setExpression(std::unique_ptr<BaseNode> n) { expr = std::move(n); }
 private:
@@ -127,11 +149,9 @@ private:
     std::unique_ptr<BaseNode> expr;
 };
 
-constexpr unsigned int NodeType_Block = 0x09; // Add this constant
-
 class BlockNode : public BaseNode {
 public:
-    auto nodeType() const -> unsigned int override { return NodeType_Block; }
+    auto nodeType() const -> NodeType override { return NodeType::Block; }
     
     // Allows the parser to add statements as it parses them
     auto addStatement(std::unique_ptr<BaseNode> node) -> void {
@@ -146,7 +166,6 @@ private:
     std::vector<std::unique_ptr<BaseNode>> body;
 };
 
-constexpr unsigned int NodeType_Project = 0x0A;
 constexpr std::string_view allow_c_style_decl = "allow_c_style_decl";
 constexpr std::string_view decline_vulpine_style_decl = "decline_vulpine_style_decl";
 constexpr std::string_view decline_syscalls = "decline_syscalls";
@@ -156,7 +175,7 @@ constexpr std::string_view decline_pointer_decleration = "decline_pointer_decler
 
 class ProjectNode : public BaseNode {
 public:
-    auto nodeType() const -> unsigned int override { return NodeType_Project; }
+    auto nodeType() const -> NodeType override { return NodeType::Project; }
 
     using strv = std::string_view;
 
