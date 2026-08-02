@@ -35,6 +35,7 @@
     X(F16, "f16") \
     X(F32, "f32") \
     X(F64, "f64") \
+    X(Double, "double") \
     X(F128, "f128")
 
 #define STRING_LIST \
@@ -52,7 +53,9 @@
     WILDCARD_LIST \
     FLOAT_LIST \
     STRING_LIST \
-    BOOL_LIST
+    BOOL_LIST \
+    X(Byte, "byte") \
+    X(Bit, "bit") \
 
 #define FLOW_LIST \
     X(Loop, "loop") \
@@ -70,7 +73,8 @@
     X(Class, "class") \
     X(Print, "print") \
     X(Return, "return") \
-    X(Export, "export")
+    X(Export, "export") \
+    X(Nullptr, "nullptr")
 
 #define OPERATOR_LIST \
     X(Add, "+") \
@@ -219,13 +223,46 @@ namespace TokenUtils {
             #define X(name, str) case TokenType::name:
             WILDCARD_LIST
             #undef X
+            case TokenType::Nullptr:
                 return true;
             default: return false;
         }
     }
 
     inline auto isTypedef(TokenType t) -> bool {
-        return (isWildcard(t) || isFloat(t) || isUInt(t) || isInt(t) || t == TokenType::Bool || t == TokenType::String || t == TokenType::Char);
+        return (isWildcard(t) || isFloat(t) || isUInt(t) || isInt(t) || t == TokenType::Bool || t == TokenType::String || t == TokenType::Char || t == TokenType::Nullptr);
+    }
+
+    inline auto isNumericType(TokenType t) -> bool {
+        return (isInt(t) || isUInt(t) || isFloat(t) || t == TokenType::Bool || t == TokenType::Char);
+    }
+
+    inline auto getTypeWidth(TokenType t) -> int {
+        switch (t) {
+            case TokenType::Bool: return 1;
+            case TokenType::Char: return 8;
+            case TokenType::I8:
+            case TokenType::U8: return 8;
+            case TokenType::I16:
+            case TokenType::U16: return 16;
+            case TokenType::Int:
+            case TokenType::UInt:
+            case TokenType::AutoInt:
+            case TokenType::AutoUInt:
+            case TokenType::I32:
+            case TokenType::U32:
+            case TokenType::W32:
+            case TokenType::F32: return 32;
+            case TokenType::I64:
+            case TokenType::U64:
+            case TokenType::W64:
+            case TokenType::F64: return 64;
+            case TokenType::I128:
+            case TokenType::U128:
+            case TokenType::W128:
+            case TokenType::F128: return 128;
+            default: return -1;
+        }
     }
 
     inline auto isOperator(TokenType t) -> bool {
@@ -263,6 +300,7 @@ namespace TokenUtils {
             #define X(name, str) case TokenType::name:
             LITERAL_LIST
             #undef X
+            case TokenType::Nullptr:
                 return true;
             default: return false;
         }

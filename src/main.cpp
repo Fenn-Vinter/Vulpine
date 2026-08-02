@@ -1,11 +1,13 @@
 #include <AST.hpp>
 #include <fennec.hpp>
 #include <lexicon.hpp>
+#include <emitter.hpp>
 #include <iostream>
 #include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
+#include <filesystem>
 #include <fstream>
 
 std::string_view tokenTypeToString(TokenType type) {
@@ -19,9 +21,44 @@ std::string_view tokenTypeToString(TokenType type) {
 void print_help() {
     std::cout << "Fennec Compiler Usage:\n";
     std::cout << "  -i <path>    Set input filepath (Required)\n";
-    std::cout << "  -o <path>    Set output filepath (Optional, default: out.vxe)\n";
+    std::cout << "  -o <path>    Set output filepath or directory for generated IR (Optional, default: out.ll)\n";
     std::cout << "  -d           Enable debug mode\n";
     std::cout << "  -h           Show this help message\n";
+}
+
+static auto project_output_format(const std::vector<std::unique_ptr<BaseNode>>& nodes) -> std::string_view {
+    for (const auto& node : nodes) {
+        if (node->nodeType() == NodeType::Project) {
+            return static_cast<const ProjectNode*>(node.get())->getOutputType();
+        }
+    }
+    return {};
+}
+
+static auto resolve_output_path(std::string_view outputPath, std::string_view inputPath, std::string_view /*outputFormat*/) -> std::string {
+    namespace fs = std::filesystem;
+
+    fs::path out(outputPath);
+    fs::path in(inputPath);
+    std::string_view irExtension = "ll";
+
+    if (out.empty() || out == "." || out == "./" || out == ".\\" || outputPath.back() == '/' || outputPath.back() == '\\') {
+        out = fs::path(outputPath) / in.stem();
+        out.replace_extension(irExtension);
+        return out.string();
+    }
+
+    if (fs::exists(out) && fs::is_directory(out)) {
+        out /= in.stem();
+        out.replace_extension(irExtension);
+        return out.string();
+    }
+
+    if (out.extension().empty()) {
+        out.replace_extension(irExtension);
+    }
+
+    return out.string();
 }
 
 struct CompilerOptions {
@@ -45,7 +82,11 @@ void printNode(const BaseNode* node, int depth = 0) {
         }
         case NodeType::Function: {
             auto* func = static_cast<const FunctionNode*>(node);
-            std::cout << indent << "Function (" << tokenTypeToString(TokenType::Fn) << "): " << func->getName() << "()\n";
+            std::cout << indent << "Function (" << tokenTypeToString(TokenType::Fn) << "): " << func->getName();
+            if (func->getReturnType() != TokenType::Invalid) {
+                std::cout << " -> " << tokenTypeToString(func->getReturnType());
+            }
+            std::cout << "()\n";
             
             // Print function parameters
             for (const auto& param : func->getParams()) {
@@ -94,25 +135,43 @@ void printNode(const BaseNode* node, int depth = 0) {
             std::cout << indent << "  }\n";
             break;
         }
+        case NodeType::Return: {
+            auto* ret = static_cast<const ReturnNode*>(node);
+            std::cout << indent << "Return\n";
+            printNode(ret->getExpression(), depth + 1);
+            break;
+        }
         case NodeType::Literal: {
             auto* lit = static_cast<const LiteralNode*>(node);
-            std::cout << indent << "Literal: " << lit->getValue() << "\n";
+            std::cout << indent << "Literal(" << tokenTypeToString(lit->getLiteralType()) << "): " << lit->getValue() << "\n";
             break;
         }
         case NodeType::BinaryOp: {
-            std::cout << indent << "BinaryOp Node\n";
+            auto* bin = static_cast<const BinaryOpNode*>(node);
+            std::cout << indent << "BinaryOp(" << tokenTypeToString(bin->getOp()) << ") : " << tokenTypeToString(bin->getType()) << "\n";
+            printNode(bin->getLeft(), depth + 1);
+            printNode(bin->getRight(), depth + 1);
             break;
         }
         case NodeType::UnaryOp: {
-            std::cout << indent << "UnaryOp Node\n";
+            auto* unary = static_cast<const UnaryOpNode*>(node);
+            std::cout << indent << "UnaryOp(" << tokenTypeToString(unary->getOp()) << ") : " << tokenTypeToString(unary->getType()) << "\n";
+            printNode(unary->getOperand(), depth + 1);
             break;
         }
         case NodeType::Cast: {
-            std::cout << indent << "Cast Node\n";
+            auto* cast = static_cast<const CastNode*>(node);
+            std::cout << indent << "Cast(to " << tokenTypeToString(cast->getType()) << ")\n";
+            printNode(cast->getExpression(), depth + 1);
             break;
         }
         case NodeType::VariableRef: {
-            std::cout << indent << "VariableRef Node\n";
+            auto* ref = static_cast<const VariableRefNode*>(node);
+            std::cout << indent << "VariableRef: " << ref->getName();
+            if (ref->getType() != TokenType::Invalid) {
+                std::cout << " : " << tokenTypeToString(ref->getType());
+            }
+            std::cout << "\n";
             break;
         }
         case NodeType::Base: {
@@ -201,14 +260,35 @@ auto main(int argc, char* argv[]) -> int {
         }
     }
 
-    auto AST = fennec.ParserInstance()->Parse(tokens, options.input_file);
+    auto parser = fennec.ParserInstance();
+    auto AST = parser->Parse(tokens, options.input_file);
 
     std::cout << "AST Size: " << AST.size() << "\n";
+
+    if (parser->hasErrors()) {
+        std::cout << "--- Parse Errors ---\n";
+        for (auto const& error : parser->getErrors()) {
+            std::cout << error << "\n";
+        }
+        std::cout << "\n";
+    }
 
     std::cout << "--- AST Tree Structure ---\n";
     for (const auto& node : AST) {
         printNode(node.get());
     }
 
+    if (parser->hasErrors()) {
+        std::cerr << "Compilation aborted due to parse errors. No output generated.\n";
+        return 1;
+    }
+
+    std::string_view format = project_output_format(AST);
+    std::string effectiveOutput = resolve_output_path(options.output_file, options.input_file, format);
+
+    emitter codegen;
+    codegen.emit(AST, effectiveOutput);
+
+    std::cout << "Generated output: " << effectiveOutput << "\n";
     return 0;
 }

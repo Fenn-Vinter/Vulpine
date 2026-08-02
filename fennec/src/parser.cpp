@@ -27,12 +27,22 @@ Parser::~Parser() {
 // --- Centralized Error Handling & Recovery ---
 
 auto Parser::reportError(const TokenEntry& token, std::string_view message) -> void {
-    std::cerr << std::format("[PARSER ERROR] [{}:{}:{}] {}\n",
-                             m_currentFileScopePrefix,
-                             token.line,
-                             token.column,
-                             message);
+    auto formatted = std::format("[PARSER ERROR] [{}:{}:{}] {}",
+                                 m_currentFileScopePrefix,
+                                 token.line,
+                                 token.column,
+                                 message);
+    std::cerr << formatted << "\n";
+    m_errors.push_back(formatted);
     m_hasError = true;
+}
+
+auto Parser::getErrors() const -> const std::vector<std::string>& {
+    return m_errors;
+}
+
+auto Parser::hasErrors() const -> bool {
+    return !m_errors.empty();
 }
 
 auto Parser::synchronize() -> void {
@@ -67,6 +77,7 @@ auto Parser::Parse(const Tokens_t* tokens, std::string_view filepath) -> std::ve
     m_pos = 0;
     m_hasError = false;
     m_panicMode = false;
+    m_errors.clear();
 
     // Seed file path prefix and reset scope tree
     m_currentFileScopePrefix = hashFilePath(filepath);
@@ -208,44 +219,74 @@ auto Parser::lookup(std::string_view name) -> SymbolInfo* {
 auto Parser::parseExpression() -> std::unique_ptr<BaseNode> {
     if (isAtEnd()) return nullptr;
 
-    std::unique_ptr<BaseNode> left = parsePrimary();
+    auto left = parsePrimary();
+    left = parsePostfixCast(std::move(left));
 
     if (peek().type == TokenType::Semicolon || peek().type == TokenType::Eof) return left;
 
-    std::unique_ptr<BaseNode> expr{nullptr};
-    std::unique_ptr<BaseNode> right{nullptr};
-    
-    if (TokenUtils::isOperator(peek().type) && peek().type != TokenType::Assign){
-        // turn the operator into a BinaryOpNode
+    if ((TokenUtils::isOperator(peek().type) || TokenUtils::isComparativeOperator(peek().type)) && peek().type != TokenType::Assign) {
         auto opToken = consume();
+        auto right = parseExpression();
+
+        const BaseNode* leftRaw = left.get();
+        const BaseNode* rightRaw = right.get();
         auto binOpNode = std::make_unique<BinaryOpNode>(opToken.type);
         binOpNode->setLeft(std::move(left));
-        binOpNode->setRight(parseExpression());
-        expr = std::move(binOpNode);
-    } else {
-        return left;
+        binOpNode->setRight(std::move(right));
+
+        TokenType resultType = deriveBinaryResultType(leftRaw, rightRaw, opToken.type);
+        if (resultType == TokenType::Invalid) {
+            reportError(opToken, std::format("Invalid operator '{}' for operand types", opToken.str));
+        }
+        binOpNode->setResultType(resultType);
+        return binOpNode;
     }
 
-    // Storing the whole expression as one giant literal for now
-    return expr;
+    return left;
 }
 
-// checks if the value of the current token is a variableref,
-// literal or unary operator and returns the corresponding AST node.
-// If the token is not a valid primary expression, it returns nullptr.
-// This function is used as the base case for the recursive descent parsing of expressions.
-// This uses the TokenUtils::is* functions to determine the type of the token and create the appropriate AST node.
+
 auto Parser::parsePrimary() -> std::unique_ptr<BaseNode> {
     if (isAtEnd()) return nullptr;
 
     const TokenEntry& token = peek();
     
-    if (TokenUtils::isLiteral(token.type)) {
+    if (token.type == TokenType::Identifier) {
         consume();
-        return std::make_unique<LiteralNode>(token.str);
-    } else if (token.type == TokenType::Identifier) {
+        auto varRef = std::make_unique<VariableRefNode>(token.str);
+        if (auto symbol = lookup(token.str); symbol) {
+            varRef->setResolvedType(symbol->type);
+        }
+        return varRef;
+    } else if (TokenUtils::isLiteral(token.type)) {
         consume();
-        return std::make_unique<VariableNode>(token.str);
+        std::string rawValue = std::string(token.str);
+        if (token.type == TokenType::String_Literal && rawValue.size() >= 2 && rawValue.front() == '"' && rawValue.back() == '"') {
+            rawValue = rawValue.substr(1, rawValue.size() - 2);
+        }
+
+        TokenType literalType = token.type;
+        switch (token.type) {
+            case TokenType::Int_Literal:
+                literalType = TokenType::Int;
+                break;
+            case TokenType::UInt_Literal:
+                literalType = TokenType::UInt;
+                break;
+            case TokenType::Float_Literal:
+                literalType = TokenType::Float;
+                break;
+            case TokenType::Char_Literal:
+                literalType = TokenType::Char;
+                break;
+            case TokenType::String_Literal:
+                literalType = TokenType::String;
+                break;
+            default:
+                break;
+        }
+
+        return std::make_unique<LiteralNode>(literalType, std::move(rawValue));
     } else if (TokenUtils::isUnaryOperator(token.type)) {
         consume();
         auto unaryNode = std::make_unique<UnaryOpNode>(token.type);
@@ -255,12 +296,74 @@ auto Parser::parsePrimary() -> std::unique_ptr<BaseNode> {
         consume(); // consume '('
         auto expr = parseExpression();
         expect(TokenType::RightParentheses); // expect ')'
-        return expr;
+        return parsePostfixCast(std::move(expr));
     }
 
     reportError(token, std::format("Unexpected token '{}' in expression", token.str));
     m_panicMode = true;
     return nullptr;
+}
+
+auto Parser::parsePostfixCast(std::unique_ptr<BaseNode> expr) -> std::unique_ptr<BaseNode> {
+    if (peek().type == TokenType::Colon) {
+        consume();
+        if (TokenUtils::isTypedef(peek().type)) {
+            TokenType castType = peek().type;
+            consume();
+            if (!canCast(expr->getType(), castType)) {
+                reportError(peek(), std::format("Illegal cast from {} to {}", TokenToString.at(expr->getType()), TokenToString.at(castType)));
+            }
+            auto castNode = std::make_unique<CastNode>(castType);
+            castNode->setExpression(std::move(expr));
+            return castNode;
+        }
+        reportError(peek(), "Expected type after ':' cast operator.");
+    }
+    return expr;
+}
+
+auto Parser::deriveBinaryResultType(const BaseNode* left, const BaseNode* right, TokenType op) -> TokenType {
+    TokenType leftType = left ? left->getType() : TokenType::Invalid;
+    TokenType rightType = right ? right->getType() : TokenType::Invalid;
+
+    if (leftType == TokenType::Invalid || rightType == TokenType::Invalid) {
+        return TokenType::Invalid;
+    }
+
+    if (TokenUtils::isComparativeOperator(op)) {
+        if (leftType == rightType && 
+            (TokenUtils::isNumericType(leftType) || leftType == TokenType::String_Literal || leftType == TokenType::Bool)) {
+            return TokenType::Bool;
+        }
+        if (TokenUtils::isNumericType(leftType) && TokenUtils::isNumericType(rightType)) {
+            return TokenType::Bool;
+        }
+        return TokenType::Invalid;
+    }
+
+    if (TokenUtils::isOperator(op)) {
+        if (leftType == rightType) {
+            return leftType;
+        }
+        if (TokenUtils::isNumericType(leftType) && TokenUtils::isNumericType(rightType)) {
+            int leftWidth = TokenUtils::getTypeWidth(leftType);
+            int rightWidth = TokenUtils::getTypeWidth(rightType);
+            if (leftWidth < 0 || rightWidth < 0) return TokenType::Invalid;
+            return (leftWidth >= rightWidth) ? leftType : rightType;
+        }
+    }
+
+    return TokenType::Invalid;
+}
+
+auto Parser::canCast(TokenType src, TokenType dst) -> bool {
+    if (src == dst) return true;
+    if (!TokenUtils::isNumericType(src) || !TokenUtils::isNumericType(dst)) return false;
+
+    int srcWidth = TokenUtils::getTypeWidth(src);
+    int dstWidth = TokenUtils::getTypeWidth(dst);
+    if (srcWidth < 0 || dstWidth < 0) return false;
+    return dstWidth <= srcWidth;
 }
 
 auto Parser::parseProjectDecl() -> std::unique_ptr<ProjectNode> {
@@ -377,12 +480,28 @@ auto Parser::parseProjectDecl() -> std::unique_ptr<ProjectNode> {
 auto Parser::parseStatement() -> std::unique_ptr<BaseNode> {
     if (isAtEnd()) return nullptr;
     
-    // Intercept 'return' statements here so we don't have to add a new method to your .hpp file yet
-    if (peek().str == "return") {
+    if (peek().type == TokenType::Return) {
+        const TokenEntry& returnToken = peek();
         consume(); // eat 'return'
         auto expr = parseExpression(); // gather everything up to the semicolon
         expect(TokenType::Semicolon); // eat ';'
-        return expr; // Note: You can wrap this in a dedicated ReturnNode later!
+
+        if (expr && m_currentFunctionReturnType != TokenType::Invalid) {
+            TokenType exprType = expr->getType();
+            bool validReturn = (exprType == m_currentFunctionReturnType);
+            if (!validReturn && exprType == TokenType::Nullptr) {
+                validReturn = (m_currentFunctionReturnType == TokenType::Nullptr || TokenUtils::isWildcard(m_currentFunctionReturnType));
+            }
+            if (!validReturn) {
+                reportError(returnToken, std::format(
+                    "Return expression type '{}' does not match function return type '{}'.",
+                    TokenToString.at(exprType), TokenToString.at(m_currentFunctionReturnType)));
+            }
+        }
+
+        auto returnNode = std::make_unique<ReturnNode>();
+        returnNode->setExpression(std::move(expr));
+        return returnNode;
     }
 
     switch (peek().type) {
@@ -498,19 +617,69 @@ auto Parser::parseFunctionDecl() -> std::unique_ptr<BaseNode> {
     std::string_view fnName = consume().str;
     define(fnName, TokenType::Fn);
 
+    auto funcNode = std::make_unique<FunctionNode>();
+    funcNode->setName(std::string(fnName));
+
     // Expect parameter list ()
     if (!expect(TokenType::LeftParentheses)) return nullptr;
     
-    // Parse parameters if any...
     while (!isAtEnd() && peek().type != TokenType::RightParentheses) {
-        consume(); // Simplified: consume parameter tokens
+        if (peek().type == TokenType::Identifier) {
+            std::string_view paramName = consume().str;
+            TokenType paramType = TokenType::AutoWild;
+            if (expect(TokenType::Colon)) {
+                if (TokenUtils::isTypedef(peek().type)) {
+                    paramType = consume().type;
+                } else {
+                    reportError(peek(), "Expected type after parameter ':'");
+                }
+            }
+
+            define(paramName, paramType);
+            auto paramNode = std::make_unique<VariableNode>(std::string(paramName));
+            paramNode->setDeclaredType(paramType);
+            funcNode->addParam(std::move(paramNode));
+        }
+
+        if (peek().type == TokenType::Comma) {
+            consume();
+            continue;
+        }
+
+        if (peek().type != TokenType::RightParentheses) {
+            break;
+        }
     }
+
     if (!expect(TokenType::RightParentheses)) return nullptr;
+
+    if (peek().type == TokenType::Colon) {
+        consume();
+        if (peek().type == TokenType::Nullptr) {
+            funcNode->setReturnType(consume().type);
+        } else if (TokenUtils::isTypedef(peek().type)) {
+            funcNode->setReturnType(consume().type);
+        } else {
+            reportError(peek(), "Expected return type after function ':'");
+        }
+    }
+
+    TokenType previousReturnType = m_currentFunctionReturnType;
+    m_currentFunctionReturnType = funcNode->getReturnType();
 
     // Parse function body block { ... }
     if (peek().type == TokenType::LeftBrace) {
-        return parseBlock();
+        auto body = parseBlock();
+        if (body) {
+            for (auto& stmt : body->moveBody()) {
+                funcNode->addBodyNode(std::move(stmt));
+            }
+        }
+        m_currentFunctionReturnType = previousReturnType;
+        return funcNode;
     }
+
+    m_currentFunctionReturnType = previousReturnType;
 
     reportError(peek(), "Expected '{' to start function body.");
     return nullptr;

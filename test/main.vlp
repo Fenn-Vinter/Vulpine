@@ -1,16 +1,18 @@
 project HelloProgram {
     arch = ["current"];
     version = "latest_stable";
-    format = "vxe";
+    format = "exe";
     entry = main;
 
     ruleset {
         decline_vulpine_style_decl = false;
-        allow_c_style_decl = true;
+        allow_c_style_decl = false;
     }
 }
 
-fn main() {
+
+
+fn main(): uint {
     let x: int = 5;
     let y: x = 3;
 

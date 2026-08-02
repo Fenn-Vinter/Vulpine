@@ -31,6 +31,8 @@ public:
     ~Parser();
 
     auto Parse(const Tokens_t* tokens, std::string_view filepath) -> std::vector<std::unique_ptr<BaseNode>>;
+    auto getErrors() const -> const std::vector<std::string>&;
+    auto hasErrors() const -> bool;
 
 private:
     const Tokens_t* m_tokens = nullptr;
@@ -41,6 +43,7 @@ private:
     // --- Error Recovery & Diagnostics ---
     bool m_hasError = false;
     bool m_panicMode = false;
+    std::vector<std::string> m_errors;
 
     auto reportError(const TokenEntry& token, std::string_view message) -> void;
     auto synchronize() -> void;
@@ -70,6 +73,8 @@ private:
     auto expect(TokenType type) -> bool;
     auto isAtEnd() const -> bool;
 
+    TokenType m_currentFunctionReturnType = TokenType::Invalid;
+
     // --- Grammar Parsers ---
     auto parseProjectDecl() -> std::unique_ptr<ProjectNode>;
     auto parseBlock() -> std::unique_ptr<BlockNode>;
@@ -78,6 +83,9 @@ private:
     auto parseVariableDecl() -> std::unique_ptr<VariableNode>;
     auto parseFunctionDecl() -> std::unique_ptr<BaseNode>;
     auto parsePrimary() -> std::unique_ptr<BaseNode>;
+    auto parsePostfixCast(std::unique_ptr<BaseNode> expr) -> std::unique_ptr<BaseNode>;
+    auto deriveBinaryResultType(const BaseNode* left, const BaseNode* right, TokenType op) -> TokenType;
+    auto canCast(TokenType src, TokenType dst) -> bool;
     
     // --- Special Block Extensions (Vulpine Features) ---
     auto parseAsmBlock() -> std::unique_ptr<BaseNode>;

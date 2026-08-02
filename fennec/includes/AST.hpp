@@ -11,6 +11,7 @@ enum class NodeType : unsigned int {
     Base = 0,
     Variable,
     VariableRef,
+    Return,
     If,
     Function,
     Literal,
@@ -26,6 +27,7 @@ public:
     BaseNode() = default;
     virtual ~BaseNode() = default;
     virtual auto nodeType() const -> NodeType { return NodeType::Base; }
+    virtual auto getType() const -> TokenType { return TokenType::Invalid; }
 };
 
 class VariableNode : public BaseNode {
@@ -34,6 +36,7 @@ public:
     VariableNode(std::string name) : m_name(std::move(name)) {}
 
     auto nodeType() const -> NodeType override { return NodeType::Variable; }
+    auto getType() const -> TokenType override { return m_declaredType; }
     
     // Member accessors
     auto setName(const std::string& name) -> void { m_name = name; }
@@ -55,14 +58,18 @@ private:
 
 class VariableRefNode : public BaseNode {
 public:
-    VariableRefNode(std::string_view name) : m_name(name) {}
+    VariableRefNode(std::string_view name, TokenType resolvedType = TokenType::Invalid)
+        : m_name(name), m_resolvedType(resolvedType) {}
 
     auto nodeType() const -> NodeType override { return NodeType::VariableRef; }
+    auto getType() const -> TokenType override { return m_resolvedType; }
 
     auto setName(const std::string_view& name) -> void { m_name = name; }
     auto getName() const -> const std::string_view& { return m_name; }
+    auto setResolvedType(TokenType type) -> void { m_resolvedType = type; }
 private:
     std::string_view m_name;
+    TokenType m_resolvedType{TokenType::Invalid};
 };
 
 class IfNode : public BaseNode {
@@ -80,12 +87,27 @@ private:
     std::vector<std::unique_ptr<BaseNode>> body;
 };
 
+class ReturnNode : public BaseNode {
+public:
+    auto nodeType() const -> NodeType override { return NodeType::Return; }
+    auto getType() const -> TokenType override { return expr ? expr->getType() : TokenType::Invalid; }
+    auto setExpression(std::unique_ptr<BaseNode> n) -> void { expr = std::move(n); }
+    auto getExpression() const -> const BaseNode* { return expr.get(); }
+
+private:
+    std::unique_ptr<BaseNode> expr;
+};
+
 class FunctionNode : public BaseNode {
 public:
     auto nodeType() const -> NodeType override { return NodeType::Function; }
+    auto getType() const -> TokenType override { return returnType; }
 
     auto setName(std::string name) -> void { this->name = std::move(name); }
     auto getName() const -> const std::string& { return name; }
+
+    auto setReturnType(TokenType type) -> void { returnType = type; }
+    auto getReturnType() const -> TokenType { return returnType; }
 
     auto addParam(std::unique_ptr<VariableNode> param) -> void { params.push_back(std::move(param)); }
     auto addBodyNode(std::unique_ptr<BaseNode> node) -> void { body.push_back(std::move(node)); }
@@ -95,17 +117,25 @@ public:
 
 private:
     std::string name;
+    TokenType returnType{TokenType::Invalid};
     std::vector<std::unique_ptr<VariableNode>> params;
     std::vector<std::unique_ptr<BaseNode>> body;
 };
 
-// Literal Node: Stores the value and its type
+// Literal Node: Stores the literal type and raw value.
 class LiteralNode : public BaseNode {
 public:
-    LiteralNode(std::string value) : value(std::move(value)) {}
+    LiteralNode(TokenType literalType, std::string value)
+        : type(literalType), value(std::move(value)) {}
+
     auto nodeType() const -> NodeType override { return NodeType::Literal; }
+    auto getType() const -> TokenType override { return type; }
     auto getValue() const -> const std::string& { return value; }
+    auto getLiteralType() const -> TokenType { return type; }
+    auto isStringLiteral() const -> bool { return type == TokenType::String_Literal; }
+
 private:
+    TokenType type{TokenType::Invalid};
     std::string value;
 };
 
@@ -114,13 +144,20 @@ class BinaryOpNode : public BaseNode {
 public:
     BinaryOpNode(TokenType op) : op(op) {}
     auto nodeType() const -> NodeType override { return NodeType::BinaryOp; }
-    
+    auto getType() const -> TokenType override { return resultType; }
+    auto getOp() const -> TokenType { return op; }
+    auto getLeft() const -> const BaseNode* { return left.get(); }
+    auto getRight() const -> const BaseNode* { return right.get(); }
+
     auto setLeft(std::unique_ptr<BaseNode> n) { left = std::move(n); }
     auto setRight(std::unique_ptr<BaseNode> n) { right = std::move(n); }
+    auto setResultType(TokenType type) { resultType = type; }
+
 private:
     TokenType op{TokenType::Invalid};
     std::unique_ptr<BaseNode> left{nullptr};
     std::unique_ptr<BaseNode> right{nullptr};
+    TokenType resultType{TokenType::Invalid};
 };
 
 // UnaryOpNode: Handles pointers (&) and dereferences (*)
@@ -128,6 +165,9 @@ class UnaryOpNode : public BaseNode {
 public:
     UnaryOpNode(TokenType op) : op(op) {}
     auto nodeType() const -> NodeType override { return NodeType::UnaryOp; }
+    auto getType() const -> TokenType override { return operand ? operand->getType() : TokenType::Invalid; }
+    auto getOp() const -> TokenType { return op; }
+    auto getOperand() const -> const BaseNode* { return operand.get(); }
     auto setOperand(std::unique_ptr<BaseNode> n) { operand = std::move(n); }
     auto setIsPrefix(bool isPrefix) { this->isPrefix = isPrefix; }
     auto getIsPrefix() const -> bool { return isPrefix; }
@@ -140,12 +180,14 @@ private:
 // CastNode: Handles type conversion
 class CastNode : public BaseNode {
 public:
-    CastNode(std::string targetType) : targetType(std::move(targetType)) {}
+    CastNode(TokenType targetType) : targetType(targetType) {}
     auto nodeType() const -> NodeType override { return NodeType::Cast; }
+    auto getType() const -> TokenType override { return targetType; }
     
     auto setExpression(std::unique_ptr<BaseNode> n) { expr = std::move(n); }
+    auto getExpression() const -> const BaseNode* { return expr.get(); }
 private:
-    std::string targetType;
+    TokenType targetType{TokenType::Invalid};
     std::unique_ptr<BaseNode> expr;
 };
 
@@ -160,6 +202,10 @@ public:
     
     auto getBody() const -> const std::vector<std::unique_ptr<BaseNode>>& {
         return body;
+    }
+
+    auto moveBody() -> std::vector<std::unique_ptr<BaseNode>> {
+        return std::move(body);
     }
 
 private:
