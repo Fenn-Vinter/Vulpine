@@ -35,35 +35,67 @@ static auto project_output_format(const std::vector<std::unique_ptr<BaseNode>>& 
     return {};
 }
 
-static auto resolve_output_path(std::string_view outputPath, std::string_view inputPath, std::string_view /*outputFormat*/) -> std::string {
+static auto normalize_format(std::string_view format) -> std::string {
+    std::string normalized{format};
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char c) { return std::tolower(c); });
+    if (normalized == "o") normalized = "obj";
+    if (normalized == "object") normalized = "obj";
+    if (normalized == "llvm") normalized = "ll";
+    return normalized;
+}
+
+static auto format_extension(std::string_view format) -> std::string_view {
+    if (format == "exe") return "exe";
+    if (format == "obj") return "o";
+    return "ll";
+}
+
+static auto resolve_output_path(std::string_view outputPath, std::string_view inputPath, std::string_view outputFormat) -> std::string {
     namespace fs = std::filesystem;
 
+    std::string format = normalize_format(outputFormat);
+    if (format.empty()) format = "ll";
     fs::path out(outputPath);
     fs::path in(inputPath);
-    std::string_view irExtension = "ll";
+    std::string_view extension = format_extension(format);
+
+    if (outputPath.empty()) {
+        out = in.stem();
+        out.replace_extension(extension);
+        return out.string();
+    }
 
     if (out.empty() || out == "." || out == "./" || out == ".\\" || outputPath.back() == '/' || outputPath.back() == '\\') {
         out = fs::path(outputPath) / in.stem();
-        out.replace_extension(irExtension);
+        out.replace_extension(extension);
         return out.string();
     }
 
     if (fs::exists(out) && fs::is_directory(out)) {
         out /= in.stem();
-        out.replace_extension(irExtension);
+        out.replace_extension(extension);
         return out.string();
     }
 
     if (out.extension().empty()) {
-        out.replace_extension(irExtension);
+        out.replace_extension(extension);
+    } else {
+        auto currentExt = out.extension().string();
+        if (format == "exe" && currentExt != ".exe") {
+            out.replace_extension(extension);
+        } else if (format == "obj" && currentExt != ".o") {
+            out.replace_extension(extension);
+        } else if (format == "ll" && currentExt != ".ll") {
+            out.replace_extension(extension);
+        }
     }
 
     return out.string();
 }
 
 struct CompilerOptions {
-    std::string_view input_file;
-    std::string_view output_file = "out.vxe"; 
+    std::string input_file;
+    std::string output_file;
     bool debug_mode = false;
 };
 
@@ -287,7 +319,7 @@ auto main(int argc, char* argv[]) -> int {
     std::string effectiveOutput = resolve_output_path(options.output_file, options.input_file, format);
 
     emitter codegen;
-    codegen.emit(AST, effectiveOutput);
+    codegen.emit(AST, effectiveOutput, format);
 
     std::cout << "Generated output: " << effectiveOutput << "\n";
     return 0;

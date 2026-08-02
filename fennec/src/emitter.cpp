@@ -2,14 +2,29 @@
 #include "lexicon.hpp"
 #include <emitter.hpp>
 #include <system_error>
+#include <filesystem>
+#include <cstdlib>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/TargetParser/Host.h>
+#include <llvm/MC/TargetRegistry.h>
+#include <llvm/Support/TargetSelect.h>
+#include <llvm/Target/TargetOptions.h>
+#include <llvm/Target/TargetMachine.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/LegacyPassManager.h>
+#include <llvm/Support/FormattedStream.h>
+#include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/Program.h>
 
 emitter::emitter() 
     : context(),
       module(std::make_unique<llvm::Module>("VulpineModule", context)),
-      builder(context) {}
+      builder(context) {
+    llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTargetAsmPrinter();
+    llvm::InitializeNativeTargetAsmParser();
+}
 
 emitter::~emitter() = default;
 
@@ -321,8 +336,68 @@ auto emitter::emit_function_body(const FunctionNode* node, llvm::Function* fn) -
     }
 }
 
-auto emitter::emit(const std::vector<std::unique_ptr<BaseNode>>& nodes, std::string_view filepath) -> void {
+static auto normalize_output_format(std::string_view format) -> std::string {
+    std::string normalized{format};
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char c) { return std::tolower(c); });
+    if (normalized == "object" || normalized == "o") return "obj";
+    if (normalized == "llvm") return "ll";
+    if (normalized.empty()) return "ll";
+    return normalized;
+}
+
+static auto get_target_machine() -> std::unique_ptr<llvm::TargetMachine> {
+    std::string targetTripleStr = llvm::sys::getDefaultTargetTriple();
+    std::string error;
+    llvm::Triple targetTriple(targetTripleStr);
+    const llvm::Target* target = llvm::TargetRegistry::lookupTarget(targetTriple, error);
+    if (!target) {
+        return nullptr;
+    }
+
+    llvm::TargetOptions opt;
+    auto cpu = "generic";
+    auto features = "";
+
+    return std::unique_ptr<llvm::TargetMachine>(
+        target->createTargetMachine(targetTriple, cpu, features, opt, llvm::Reloc::PIC_)
+    );
+}
+
+static auto emit_object_for_module(llvm::Module* module, std::string_view filepath) -> bool {
+    auto targetMachine = get_target_machine();
+    if (!targetMachine) return false;
+
+    module->setDataLayout(targetMachine->createDataLayout());
+    module->setTargetTriple(targetMachine->getTargetTriple());
+
+    std::error_code ec;
+    llvm::raw_fd_ostream dest(std::string(filepath), ec, llvm::sys::fs::OF_None);
+    if (ec) return false;
+
+    llvm::legacy::PassManager pass;
+    if (targetMachine->addPassesToEmitFile(pass, dest, nullptr, llvm::CodeGenFileType::ObjectFile)) {
+        return false;
+    }
+
+    pass.run(*module);
+    dest.flush();
+    return true;
+}
+
+static auto link_executable(std::string_view objectFile, std::string_view exeFile) -> bool {
+    std::string command;
+#ifdef _WIN32
+    command = std::string("g++ ") + std::string(objectFile) + " -o " + std::string(exeFile);
+#else
+    command = std::string("g++ ") + std::string(objectFile) + " -o " + std::string(exeFile);
+#endif
+    int result = std::system(command.c_str());
+    return result == 0;
+}
+
+auto emitter::emit(const std::vector<std::unique_ptr<BaseNode>>& nodes, std::string_view filepath, std::string_view format) -> void {
     const ProjectNode* project = nullptr;
+    std::string outputMode = normalize_output_format(format);
 
     // First pass: locate the ProjectNode metadata if present
     for (const auto& node : nodes) {
@@ -358,7 +433,32 @@ auto emitter::emit(const std::vector<std::unique_ptr<BaseNode>>& nodes, std::str
         }
     }
 
-    // Dump generated LLVM IR module to disk
+    if (outputMode == "ll") {
+        std::error_code ec;
+        llvm::raw_fd_ostream outFile(filepath, ec, llvm::sys::fs::OF_None);
+        if (!ec) {
+            module->print(outFile, nullptr);
+        }
+        return;
+    }
+
+    if (outputMode == "obj") {
+        if (!emit_object_for_module(module.get(), filepath)) {
+            return;
+        }
+        return;
+    }
+
+    if (outputMode == "exe") {
+        std::filesystem::path objPath = std::filesystem::path(filepath).replace_extension(".o");
+        if (!emit_object_for_module(module.get(), objPath.string())) {
+            return;
+        }
+        link_executable(objPath.string(), filepath);
+        return;
+    }
+
+    // Fallback to emitting LLVM IR if output mode is unknown.
     std::error_code ec;
     llvm::raw_fd_ostream outFile(filepath, ec, llvm::sys::fs::OF_None);
     if (!ec) {

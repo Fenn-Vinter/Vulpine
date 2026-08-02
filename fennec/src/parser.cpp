@@ -449,7 +449,11 @@ auto Parser::parseProjectDecl() -> std::unique_ptr<ProjectNode> {
             }
             else if (keyType == TokenType::Format || keyStr == "format") {
                 if (peek().type == TokenType::String_Literal || peek().type == TokenType::Identifier) {
-                    consume();
+                    std::string_view formatValue = consume().str;
+                    if (formatValue.size() >= 2 && formatValue.front() == '"' && formatValue.back() == '"') {
+                        formatValue = formatValue.substr(1, formatValue.size() - 2);
+                    }
+                    node->setOutputType(formatValue);
                 } else {
                     reportError(peek(), "Expected string literal or identifier for 'format' key.");
                 }

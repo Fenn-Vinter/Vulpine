@@ -10,13 +10,11 @@ project HelloProgram {
     }
 }
 
-
-
 fn main(): uint {
     let x: int = 5;
     let y: x = 3;
 
     let z: uint = (x + y):uint;
 
-    return z + 10;
+    return z + 12;
 }

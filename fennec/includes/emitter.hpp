@@ -28,7 +28,7 @@ public:
     emitter();
     ~emitter();
 
-    auto emit(const std::vector<std::unique_ptr<BaseNode>>& nodes, std::string_view filepath) -> void;
+    auto emit(const std::vector<std::unique_ptr<BaseNode>>& nodes, std::string_view filepath, std::string_view format) -> void;
 
 private:
     // Helper to initialize entry point (e.g. main)
