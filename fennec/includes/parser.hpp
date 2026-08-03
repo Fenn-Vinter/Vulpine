@@ -81,8 +81,10 @@ private:
     auto parseStatement() -> std::unique_ptr<BaseNode>;
     auto parseExpression() -> std::unique_ptr<BaseNode>;
     auto parseVariableDecl() -> std::unique_ptr<VariableNode>;
+    auto parseIfStatement() -> std::unique_ptr<BaseNode>;
     auto parseFunctionDecl() -> std::unique_ptr<BaseNode>;
     auto parsePrimary() -> std::unique_ptr<BaseNode>;
+    auto parseCall(std::unique_ptr<BaseNode> callee) -> std::unique_ptr<BaseNode>;
     auto parsePostfixCast(std::unique_ptr<BaseNode> expr) -> std::unique_ptr<BaseNode>;
     auto deriveBinaryResultType(const BaseNode* left, const BaseNode* right, TokenType op) -> TokenType;
     auto canCast(TokenType src, TokenType dst) -> bool;

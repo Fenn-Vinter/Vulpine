@@ -30,7 +30,7 @@
     X(W128, "w128")
 
 #define FLOAT_LIST \
-    X(AutoFloat, "wauto") \
+    X(AutoFloat, "fauto") \
     X(Float, "float") \
     X(F16, "f16") \
     X(F32, "f32") \
@@ -69,10 +69,12 @@
 
 #define KEYWORD_LIST \
     X(Let, "let") \
+    X(Const, "const") \
     X(Fn, "fn") \
     X(Class, "class") \
     X(Print, "print") \
     X(Return, "return") \
+    X(Else, "else") \
     X(Export, "export") \
     X(Nullptr, "nullptr")
 
@@ -109,7 +111,9 @@
     X(Increment, "++") \
     X(Decrement, "--") \
     X(SQRT, "//") \
-    X(Exponent, "**")
+    X(Exponent, "**") \
+    X(Address, "@") \
+    X(Deref, "^")
 
 #define LITERAL_LIST \
     X(Identifier, "%Identifier%") \
@@ -229,6 +233,10 @@ namespace TokenUtils {
         }
     }
 
+    inline auto isPointerType(TokenType t) -> bool {
+        return t == TokenType::Nullptr;
+    }
+
     inline auto isTypedef(TokenType t) -> bool {
         return (isWildcard(t) || isFloat(t) || isUInt(t) || isInt(t) || t == TokenType::Bool || t == TokenType::String || t == TokenType::Char || t == TokenType::Nullptr);
     }
@@ -247,12 +255,13 @@ namespace TokenUtils {
             case TokenType::U16: return 16;
             case TokenType::Int:
             case TokenType::UInt:
-            case TokenType::AutoInt:
-            case TokenType::AutoUInt:
             case TokenType::I32:
             case TokenType::U32:
             case TokenType::W32:
             case TokenType::F32: return 32;
+            case TokenType::AutoInt:
+            case TokenType::AutoUInt:
+            case TokenType::AutoWild: return static_cast<int>(sizeof(void*) * 8);
             case TokenType::I64:
             case TokenType::U64:
             case TokenType::W64:
@@ -261,6 +270,7 @@ namespace TokenUtils {
             case TokenType::U128:
             case TokenType::W128:
             case TokenType::F128: return 128;
+            case TokenType::Nullptr: return static_cast<int>(sizeof(void*) * 8);
             default: return -1;
         }
     }
@@ -269,6 +279,7 @@ namespace TokenUtils {
         switch (t) {
             #define X(name, str) case TokenType::name:
             OPERATOR_LIST
+            OPERATIVE_ASSIGN_LIST
             #undef X
                 return true;
             default: return false;
@@ -287,6 +298,8 @@ namespace TokenUtils {
 
     inline auto isUnaryOperator(TokenType t) -> bool {
         switch (t) {
+            case TokenType::NOT:
+                return true;
             #define X(name, str) case TokenType::name:
             UNARY_OPERATOR_LIST
             #undef X

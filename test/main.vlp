@@ -10,11 +10,35 @@ project HelloProgram {
     }
 }
 
+fn math(x: int, y: int): int {
+    return x + y;
+}
+
+fn changeVal(x: int): nullptr {
+    x += 6;
+}
+
+fn looper(a: int): nullptr {
+    if (a < 10) {
+        a += 1;
+        looper(a);
+    }
+}
+
 fn main(): uint {
-    let x: int = 5;
-    let y: x = 3;
+    let x: int = 6;
+    let y: int = 6;
 
-    let z: uint = (x + y):uint;
+    let z: uint = math(x, y): uint; 
 
-    return z + 12;
+    changeVal(z);
+
+    let w: wauto = @z;
+
+    let a: uint = ^w; 
+
+    let b: int = 0;
+    looper(b);
+
+    return b:uint;
 }

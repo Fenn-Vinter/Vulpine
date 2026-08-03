@@ -39,6 +39,9 @@ private:
     auto emit_node(const BaseNode* node) -> llvm::Value*;
     auto emit_literal(const LiteralNode* node) -> llvm::Value*;
     auto emit_cast(const CastNode* node) -> llvm::Value*;
+    auto emit_call(const CallNode* node) -> llvm::Value*;
+    auto emit_if(const IfNode* node) -> llvm::Value*;
+    auto emit_unary(const UnaryOpNode* node) -> llvm::Value*;
 
     auto emit_function(const FunctionNode* node) -> llvm::Function*;
 

@@ -18,6 +18,7 @@ enum class NodeType : unsigned int {
     BinaryOp,
     UnaryOp,
     Cast,
+    Call,
     Block,
     Project
 };
@@ -50,10 +51,17 @@ public:
     auto setDeclaredType(TokenType type) -> void { m_declaredType = type; }
     auto getDeclaredType() const -> TokenType { return m_declaredType; }
 
+    auto setParameterCopy(bool copy) -> void { m_isParameterCopy = copy; }
+    auto isParameterCopy() const -> bool { return m_isParameterCopy; }
+    auto setConst(bool isConst) -> void { m_isConst = isConst; }
+    auto isConst() const -> bool { return m_isConst; }
+
 private:
     std::string m_name;
     TokenType m_declaredType = TokenType::AutoWild;
     std::unique_ptr<BaseNode> m_value;
+    bool m_isParameterCopy = false;
+    bool m_isConst = false;
 };
 
 class VariableRefNode : public BaseNode {
@@ -82,9 +90,13 @@ public:
     auto addBodyNode(std::unique_ptr<BaseNode> node) -> void { body.push_back(std::move(node)); }
     auto getBody() const -> const std::vector<std::unique_ptr<BaseNode>>& { return body; }
 
+    auto setElseBranch(std::unique_ptr<BaseNode> node) -> void { elseBranch = std::move(node); }
+    auto getElseBranch() const -> const BaseNode* { return elseBranch.get(); }
+
 private:
     std::unique_ptr<BaseNode> condition;
     std::vector<std::unique_ptr<BaseNode>> body;
+    std::unique_ptr<BaseNode> elseBranch;
 };
 
 class ReturnNode : public BaseNode {
@@ -165,7 +177,12 @@ class UnaryOpNode : public BaseNode {
 public:
     UnaryOpNode(TokenType op) : op(op) {}
     auto nodeType() const -> NodeType override { return NodeType::UnaryOp; }
-    auto getType() const -> TokenType override { return operand ? operand->getType() : TokenType::Invalid; }
+    auto getType() const -> TokenType override {
+        if (op == TokenType::NOT) return TokenType::Bool;
+        if (op == TokenType::Address) return TokenType::Nullptr;
+        if (op == TokenType::Deref) return TokenType::Nullptr;
+        return operand ? operand->getType() : TokenType::Invalid;
+    }
     auto getOp() const -> TokenType { return op; }
     auto getOperand() const -> const BaseNode* { return operand.get(); }
     auto setOperand(std::unique_ptr<BaseNode> n) { operand = std::move(n); }
@@ -189,6 +206,23 @@ public:
 private:
     TokenType targetType{TokenType::Invalid};
     std::unique_ptr<BaseNode> expr;
+};
+
+class CallNode : public BaseNode {
+public:
+    CallNode(std::string name) : functionName(std::move(name)) {}
+    auto nodeType() const -> NodeType override { return NodeType::Call; }
+    auto getType() const -> TokenType override { return returnType; }
+
+    auto getName() const -> const std::string& { return functionName; }
+    auto addArgument(std::unique_ptr<BaseNode> arg) -> void { arguments.push_back(std::move(arg)); }
+    auto getArguments() const -> const std::vector<std::unique_ptr<BaseNode>>& { return arguments; }
+    auto setReturnType(TokenType type) -> void { returnType = type; }
+
+private:
+    std::string functionName;
+    TokenType returnType{TokenType::Invalid};
+    std::vector<std::unique_ptr<BaseNode>> arguments;
 };
 
 class BlockNode : public BaseNode {

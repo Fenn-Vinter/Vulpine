@@ -4,6 +4,9 @@
 #include <system_error>
 #include <filesystem>
 #include <cstdlib>
+#include <algorithm>
+#include <cctype>
+
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Host.h>
@@ -30,36 +33,31 @@ emitter::~emitter() = default;
 
 auto emitter::vulpine_type_to_llvm_type(TokenType type) -> llvm::Type* {
     switch (type) {
-        // Pointers & Nothingness (String & Nullptr)
-        // Vulpine unifies empty returns and null references into 'nullptr' (opaque ptr in LLVM IR)
         case TokenType::Nullptr: 
         case TokenType::String:
+        case TokenType::String_Literal:
             return llvm::PointerType::get(context, 0);
 
-        // 128-bit Integers
         case TokenType::I128: case TokenType::U128: case TokenType::W128:
             return llvm::Type::getInt128Ty(context);
 
-        // 64-bit Integers
         case TokenType::I64: case TokenType::U64: case TokenType::W64:
             return llvm::Type::getInt64Ty(context);
 
-        // 32-bit Integers (Default target word width for 'int', 'uint', 'auto')
-        case TokenType::Int: case TokenType::UInt: case TokenType::AutoInt: case TokenType::AutoUInt:
+        case TokenType::Int: case TokenType::UInt:
         case TokenType::I32: case TokenType::U32: case TokenType::W32:
-        case TokenType::Wild: case TokenType::AutoWild:
             return llvm::Type::getInt32Ty(context);
 
-        // 16-bit Integers
+        case TokenType::AutoInt: case TokenType::AutoUInt: case TokenType::AutoWild:
+            return llvm::Type::getIntNTy(context, static_cast<unsigned>(sizeof(void*) * 8));
+
         case TokenType::I16: case TokenType::U16: case TokenType::W16:
             return llvm::Type::getInt16Ty(context);
 
-        // 8-bit Integers / Bytes / Chars
         case TokenType::I8: case TokenType::U8: case TokenType::W8: 
         case TokenType::Char: case TokenType::Byte:
             return llvm::Type::getInt8Ty(context);
 
-        // Floats
         case TokenType::F16:
             return llvm::Type::getHalfTy(context);
         case TokenType::F32: case TokenType::Float: case TokenType::AutoFloat:
@@ -69,7 +67,6 @@ auto emitter::vulpine_type_to_llvm_type(TokenType type) -> llvm::Type* {
         case TokenType::F128:
             return llvm::Type::getFP128Ty(context);
 
-        // Booleans & Bits
         case TokenType::Bool: case TokenType::Bit:
             return llvm::Type::getInt1Ty(context);
 
@@ -79,31 +76,23 @@ auto emitter::vulpine_type_to_llvm_type(TokenType type) -> llvm::Type* {
 }
 
 auto emitter::setup_entry_function(const FunctionNode* node) -> llvm::Function* {
-    // 1. Build argument types dynamically from AST node parameters
     std::vector<llvm::Type*> paramTypes;
     for (const auto& param : node->getParams()) {
-        llvm::Type* paramTy = vulpine_type_to_llvm_type(param->getType());
-        if (!paramTy) {
-            // Default parameter fallback if type lookup fails
-            paramTy = llvm::Type::getInt32Ty(context);
+        llvm::Type* baseType = vulpine_type_to_llvm_type(param->getType());
+        if (!baseType) {
+            baseType = llvm::Type::getInt32Ty(context);
         }
+        llvm::Type* paramTy = param->isParameterCopy() ? baseType : llvm::PointerType::get(context, 0);
         paramTypes.push_back(paramTy);
     }
 
-    // 2. Resolve return type (nullptr maps to opaque ptr)
     llvm::Type* retType = vulpine_type_to_llvm_type(node->getReturnType());
     if (!retType) {
-        retType = llvm::Type::getInt32Ty(context); // Default to int32 for untyped functions
+        retType = llvm::Type::getInt32Ty(context);
     }
 
-    // 3. Create raw signature
-    llvm::FunctionType* funcType = llvm::FunctionType::get(
-        retType,
-        paramTypes,
-        false // Not variadic
-    );
+    llvm::FunctionType* funcType = llvm::FunctionType::get(retType, paramTypes, false);
 
-    // 4. Create external linkage entry point
     llvm::Function* entryFunc = llvm::Function::Create(
         funcType,
         llvm::Function::ExternalLinkage,
@@ -111,12 +100,7 @@ auto emitter::setup_entry_function(const FunctionNode* node) -> llvm::Function* 
         module.get()
     );
 
-    // 5. Mark freestanding attributes
     entryFunc->addFnAttr(llvm::Attribute::NoRecurse);
-
-    llvm::BasicBlock* entryBlock = llvm::BasicBlock::Create(context, "entry", entryFunc);
-    builder.SetInsertPoint(entryBlock);
-
     return entryFunc;
 }
 
@@ -132,8 +116,16 @@ auto emitter::emit_variable(const VariableNode* node) -> llvm::Value* {
     if (node->getValue()) {
         llvm::Value* initVal = emit_node(node->getValue());
         if (initVal) {
-            if (initVal->getType() != varType && initVal->getType()->isIntegerTy() && varType->isIntegerTy()) {
-                initVal = builder.CreateIntCast(initVal, varType, true, "casttmp");
+            if (initVal->getType() != varType) {
+                if (initVal->getType()->isIntegerTy() && varType->isIntegerTy()) {
+                    initVal = builder.CreateIntCast(initVal, varType, true, "casttmp");
+                } else if (initVal->getType()->isPointerTy() && varType->isIntegerTy()) {
+                    initVal = builder.CreatePtrToInt(initVal, varType, "ptrtoint");
+                } else if (initVal->getType()->isIntegerTy() && varType->isPointerTy()) {
+                    initVal = builder.CreateIntToPtr(initVal, varType, "inttoptr");
+                } else if (initVal->getType()->isPointerTy() && varType->isPointerTy()) {
+                    initVal = builder.CreateBitCast(initVal, varType, "ptrcast");
+                }
             }
             builder.CreateStore(initVal, alloc);
         }
@@ -213,6 +205,18 @@ auto emitter::emit_cast(const CastNode* node) -> llvm::Value* {
     bool sourceUnsigned = TokenUtils::isUInt(node->getExpression()->getType());
     bool targetUnsigned = TokenUtils::isUInt(node->getType());
 
+    if (sourceType->isPointerTy() && targetType->isPointerTy()) {
+        return exprValue;
+    }
+
+    if (sourceType->isPointerTy() && targetType->isIntegerTy()) {
+        return builder.CreatePtrToInt(exprValue, targetType, "casttmp");
+    }
+
+    if (sourceType->isIntegerTy() && targetType->isPointerTy()) {
+        return builder.CreateIntToPtr(exprValue, targetType, "casttmp");
+    }
+
     if (sourceIsInt && targetIsInt) {
         return builder.CreateIntCast(exprValue, targetType, !sourceUnsigned, "casttmp");
     }
@@ -233,11 +237,95 @@ auto emitter::emit_cast(const CastNode* node) -> llvm::Value* {
         return builder.CreateFPCast(exprValue, targetType, "casttmp");
     }
 
-    if (sourceType->isPointerTy() && targetType->isPointerTy()) {
-        return builder.CreateBitCast(exprValue, targetType, "casttmp");
+    return nullptr;
+}
+
+static auto emit_to_bool(llvm::IRBuilder<>& builder, llvm::Value* value) -> llvm::Value* {
+    llvm::Type* type = value->getType();
+    if (type->isIntegerTy(1)) {
+        return value;
+    }
+    if (type->isFloatingPointTy()) {
+        return builder.CreateFCmpONE(value, llvm::ConstantFP::get(type, 0.0), "tobool");
+    }
+    if (type->isIntegerTy()) {
+        return builder.CreateICmpNE(value, llvm::ConstantInt::get(type, 0), "tobool");
+    }
+    if (type->isPointerTy()) {
+        return builder.CreateICmpNE(value, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(type)), "tobool");
+    }
+    return nullptr;
+}
+
+auto emitter::emit_if(const IfNode* node) -> llvm::Value* {
+    llvm::Value* conditionValue = emit_node(node->getCondition());
+    if (!conditionValue) return nullptr;
+
+    llvm::Value* boolCondition = emit_to_bool(builder, conditionValue);
+    if (!boolCondition) return nullptr;
+
+    llvm::Function* currentFunction = builder.GetInsertBlock()->getParent();
+    llvm::BasicBlock* thenBlock = llvm::BasicBlock::Create(context, "then", currentFunction);
+    llvm::BasicBlock* mergeBlock = llvm::BasicBlock::Create(context, "ifcont", currentFunction);
+    llvm::BasicBlock* elseBlock = node->getElseBranch() ? llvm::BasicBlock::Create(context, "else", currentFunction) : nullptr;
+
+    if (node->getElseBranch()) {
+        builder.CreateCondBr(boolCondition, thenBlock, elseBlock);
+    } else {
+        builder.CreateCondBr(boolCondition, thenBlock, mergeBlock);
     }
 
+    builder.SetInsertPoint(thenBlock);
+    for (const auto& stmt : node->getBody()) {
+        emit_node(stmt.get());
+    }
+
+    if (!builder.GetInsertBlock()->getTerminator()) {
+        builder.CreateBr(mergeBlock);
+    }
+
+    if (node->getElseBranch()) {
+        builder.SetInsertPoint(elseBlock);
+        emit_node(node->getElseBranch());
+        if (!builder.GetInsertBlock()->getTerminator()) {
+            builder.CreateBr(mergeBlock);
+        }
+    }
+
+    builder.SetInsertPoint(mergeBlock);
     return nullptr;
+}
+
+auto emitter::emit_unary(const UnaryOpNode* node) -> llvm::Value* {
+    switch (node->getOp()) {
+        case TokenType::NOT: {
+            llvm::Value* operand = emit_node(node->getOperand());
+            if (!operand) return nullptr;
+            llvm::Value* boolValue = emit_to_bool(builder, operand);
+            if (!boolValue) return nullptr;
+            return builder.CreateNot(boolValue, "nottmp");
+        }
+        case TokenType::Address: {
+            auto* varRef = dynamic_cast<const VariableRefNode*>(node->getOperand());
+            if (!varRef) return nullptr;
+            auto it = namedValues.find(std::string(varRef->getName()));
+            if (it == namedValues.end()) return nullptr;
+            return it->second; // Returns alloca memory pointer
+        }
+        case TokenType::Deref: {
+            llvm::Value* operand = emit_node(node->getOperand());
+            if (!operand) return nullptr;
+            
+            // Fixed opaque pointer dereferencing
+            llvm::Type* loadType = vulpine_type_to_llvm_type(node->getType());
+            if (!loadType) {
+                loadType = llvm::Type::getInt32Ty(context);
+            }
+            return builder.CreateLoad(loadType, operand, "deref_val");
+        }
+        default:
+            return nullptr;
+    }
 }
 
 auto emitter::emit_node(const BaseNode* node) -> llvm::Value* {
@@ -245,8 +333,7 @@ auto emitter::emit_node(const BaseNode* node) -> llvm::Value* {
 
     switch (node->nodeType()) {
         case NodeType::Literal: {
-            auto* lit = static_cast<const LiteralNode*>(node);
-            return emit_literal(lit);
+            return emit_literal(static_cast<const LiteralNode*>(node));
         }
 
         case NodeType::Variable: {
@@ -257,9 +344,19 @@ auto emitter::emit_node(const BaseNode* node) -> llvm::Value* {
             auto* ref = static_cast<const VariableRefNode*>(node);
             auto it = namedValues.find(std::string(ref->getName()));
             if (it == namedValues.end()) return nullptr;
+
             llvm::Value* ptr = it->second;
-            auto* alloc = llvm::cast<llvm::AllocaInst>(ptr);
-            return builder.CreateLoad(alloc->getAllocatedType(), ptr, std::string(ref->getName()));
+
+            llvm::Type* loadType = nullptr;
+            if (auto* alloc = llvm::dyn_cast<llvm::AllocaInst>(ptr)) {
+                loadType = alloc->getAllocatedType();
+            } else if (ptr->getType()->isPointerTy()) {
+                loadType = llvm::Type::getInt32Ty(context);
+            }
+
+            if (!loadType) return nullptr;
+
+            return builder.CreateLoad(loadType, ptr, ref->getName());
         }
 
         case NodeType::BinaryOp: {
@@ -269,6 +366,8 @@ auto emitter::emit_node(const BaseNode* node) -> llvm::Value* {
             if (!lhs || !rhs) return nullptr;
 
             bool isFloat = TokenUtils::isFloat(bin->getType());
+            bool lhsFloat = lhs->getType()->isFloatingPointTy();
+            bool rhsFloat = rhs->getType()->isFloatingPointTy();
             switch (bin->getOp()) {
                 case TokenType::Add:
                     return isFloat ? builder.CreateFAdd(lhs, rhs, "addtmp") : builder.CreateAdd(lhs, rhs, "addtmp");
@@ -278,13 +377,125 @@ auto emitter::emit_node(const BaseNode* node) -> llvm::Value* {
                     return isFloat ? builder.CreateFMul(lhs, rhs, "multmp") : builder.CreateMul(lhs, rhs, "multmp");
                 case TokenType::Divide:
                     return isFloat ? builder.CreateFDiv(lhs, rhs, "divtmp") : builder.CreateSDiv(lhs, rhs, "divtmp");
+                case TokenType::EQUAL:
+                    if (lhsFloat || rhsFloat) {
+                        return builder.CreateFCmpOEQ(lhs, rhs, "eqtmp");
+                    }
+                    return builder.CreateICmpEQ(lhs, rhs, "eqtmp");
+                case TokenType::NOT_EQUAL:
+                    if (lhsFloat || rhsFloat) {
+                        return builder.CreateFCmpONE(lhs, rhs, "netmp");
+                    }
+                    return builder.CreateICmpNE(lhs, rhs, "netmp");
+                case TokenType::LESS:
+                    return lhsFloat || rhsFloat ? builder.CreateFCmpOLT(lhs, rhs, "lttmp") : builder.CreateICmpSLT(lhs, rhs, "lttmp");
+                case TokenType::LESS_EQUAL:
+                    return lhsFloat || rhsFloat ? builder.CreateFCmpOLE(lhs, rhs, "letmp") : builder.CreateICmpSLE(lhs, rhs, "letmp");
+                case TokenType::GREATER:
+                    return lhsFloat || rhsFloat ? builder.CreateFCmpOGT(lhs, rhs, "gttmp") : builder.CreateICmpSGT(lhs, rhs, "gttmp");
+                case TokenType::GREATER_EQUAL:
+                    return lhsFloat || rhsFloat ? builder.CreateFCmpOGE(lhs, rhs, "getmp") : builder.CreateICmpSGE(lhs, rhs, "getmp");
+                case TokenType::AND: {
+                    llvm::Value* leftBool = emit_to_bool(builder, lhs);
+                    llvm::Value* rightBool = emit_to_bool(builder, rhs);
+                    if (!leftBool || !rightBool) return nullptr;
+                    return builder.CreateAnd(leftBool, rightBool, "andtmp");
+                }
+                case TokenType::OR: {
+                    llvm::Value* leftBool = emit_to_bool(builder, lhs);
+                    llvm::Value* rightBool = emit_to_bool(builder, rhs);
+                    if (!leftBool || !rightBool) return nullptr;
+                    return builder.CreateOr(leftBool, rightBool, "ortmp");
+                }
+                case TokenType::Assign:
+                case TokenType::Add_Assign:
+                case TokenType::Subtract_Assign:
+                case TokenType::Multiply_Assign:
+                case TokenType::Divide_Assign:
+                case TokenType::Modulo_Assign: {
+                    auto* leftRef = dynamic_cast<const VariableRefNode*>(bin->getLeft());
+                    if (!leftRef) return nullptr;
+
+                    auto it = namedValues.find(std::string(leftRef->getName()));
+                    if (it == namedValues.end()) return nullptr;
+
+                    llvm::Value* ptr = it->second;
+
+                    llvm::Type* valueType = nullptr;
+                    if (auto* alloc = llvm::dyn_cast<llvm::AllocaInst>(ptr)) {
+                        valueType = alloc->getAllocatedType();
+                    } else {
+                        valueType = rhs->getType(); 
+                    }
+
+                    llvm::Value* leftValue = nullptr;
+                    if (bin->getOp() != TokenType::Assign) {
+                        if (ptr->getType()->isPointerTy()) {
+                            leftValue = builder.CreateLoad(valueType, ptr, "loadlhs");
+                        } else {
+                            leftValue = ptr;
+                        }
+                    }
+
+                    llvm::Value* result = nullptr;
+                    switch (bin->getOp()) {
+                        case TokenType::Assign:
+                            result = rhs;
+                            break;
+                        case TokenType::Add_Assign:
+                            result = builder.CreateAdd(leftValue, rhs, "addassign");
+                            break;
+                        case TokenType::Subtract_Assign:
+                            result = builder.CreateSub(leftValue, rhs, "subassign");
+                            break;
+                        case TokenType::Multiply_Assign:
+                            result = builder.CreateMul(leftValue, rhs, "mulassign");
+                            break;
+                        case TokenType::Divide_Assign:
+                            result = builder.CreateSDiv(leftValue, rhs, "divassign");
+                            break;
+                        case TokenType::Modulo_Assign:
+                            result = builder.CreateSRem(leftValue, rhs, "modassign");
+                            break;
+                        default:
+                            return nullptr;
+                    }
+
+                    if (!result) return nullptr;
+
+                    if (ptr->getType()->isPointerTy()) {
+                        builder.CreateStore(result, ptr);
+                    } else {
+                        namedValues[std::string(leftRef->getName())] = result;
+                    }
+
+                    return result;
+                }
+                case TokenType::AND_BIT:
+                    return builder.CreateAnd(lhs, rhs, "andbittmp");
+                case TokenType::OR_BIT:
+                    return builder.CreateOr(lhs, rhs, "orbitmp");
+                case TokenType::XOR:
+                    return builder.CreateXor(lhs, rhs, "xortmp");
                 default:
                     return nullptr;
             }
         }
 
+        case NodeType::UnaryOp: {
+            return emit_unary(static_cast<const UnaryOpNode*>(node));
+        }
+
+        case NodeType::If: {
+            return emit_if(static_cast<const IfNode*>(node));
+        }
+
         case NodeType::Cast: {
             return emit_cast(static_cast<const CastNode*>(node));
+        }
+
+        case NodeType::Call: {
+            return emit_call(static_cast<const CallNode*>(node));
         }
 
         case NodeType::Return: {
@@ -311,16 +522,62 @@ auto emitter::emit_node(const BaseNode* node) -> llvm::Value* {
     }
 }
 
+auto emitter::emit_call(const CallNode* node) -> llvm::Value* {
+    llvm::Function* function = module->getFunction(node->getName());
+    if (!function) {
+        return nullptr;
+    }
+
+    std::vector<llvm::Value*> args;
+    unsigned idx = 0;
+    for (const auto& arg : node->getArguments()) {
+        llvm::Type* paramType = function->getFunctionType()->getParamType(idx);
+        llvm::Value* argValue = nullptr;
+
+        if (paramType->isPointerTy()) {
+            if (arg->nodeType() == NodeType::VariableRef) {
+                auto* varRef = static_cast<const VariableRefNode*>(arg.get());
+                auto it = namedValues.find(std::string(varRef->getName()));
+                if (it == namedValues.end()) return nullptr;
+                argValue = it->second;
+            } else {
+                argValue = emit_node(arg.get());
+                if (!argValue) return nullptr;
+            }
+        } else {
+            argValue = emit_node(arg.get());
+            if (!argValue) return nullptr;
+            if (argValue->getType() != paramType) {
+                if (argValue->getType()->isIntegerTy() && paramType->isIntegerTy()) {
+                    argValue = builder.CreateIntCast(argValue, paramType, true, "argcast");
+                }
+            }
+        }
+
+        args.push_back(argValue);
+        idx++;
+    }
+
+    return builder.CreateCall(function, args, "calltmp");
+}
+
 auto emitter::emit_function_body(const FunctionNode* node, llvm::Function* fn) -> void {
     namedValues.clear();
+
+    llvm::BasicBlock* entryBlock = llvm::BasicBlock::Create(context, "entry", fn);
+    builder.SetInsertPoint(entryBlock);
 
     unsigned idx = 0;
     for (auto& arg : fn->args()) {
         const auto& param = node->getParams()[idx++];
         arg.setName(param->getName());
-        llvm::AllocaInst* alloc = builder.CreateAlloca(arg.getType(), nullptr, arg.getName());
-        builder.CreateStore(&arg, alloc);
-        namedValues[param->getName()] = alloc;
+        if (param->isParameterCopy()) {
+            llvm::AllocaInst* alloc = builder.CreateAlloca(arg.getType(), nullptr, arg.getName());
+            builder.CreateStore(&arg, alloc);
+            namedValues[param->getName()] = alloc;
+        } else {
+            namedValues[param->getName()] = &arg;
+        }
     }
 
     for (const auto& stmt : node->getBody()) {
@@ -385,52 +642,34 @@ static auto emit_object_for_module(llvm::Module* module, std::string_view filepa
 }
 
 static auto link_executable(std::string_view objectFile, std::string_view exeFile) -> bool {
-    std::string command;
-#ifdef _WIN32
-    command = std::string("g++ ") + std::string(objectFile) + " -o " + std::string(exeFile);
-#else
-    command = std::string("g++ ") + std::string(objectFile) + " -o " + std::string(exeFile);
-#endif
+    std::string command = std::string("g++ ") + std::string(objectFile) + " -o " + std::string(exeFile);
     int result = std::system(command.c_str());
     return result == 0;
 }
 
 auto emitter::emit(const std::vector<std::unique_ptr<BaseNode>>& nodes, std::string_view filepath, std::string_view format) -> void {
-    const ProjectNode* project = nullptr;
     std::string outputMode = normalize_output_format(format);
 
-    // First pass: locate the ProjectNode metadata if present
+    // Pass 1: Setup function declarations
+    std::vector<std::pair<const FunctionNode*, llvm::Function*>> functionsToEmit;
     for (const auto& node : nodes) {
-        if (node->nodeType() == NodeType::Project) {
-            project = static_cast<const ProjectNode*>(node.get());
-            break;
+        if (node->nodeType() == NodeType::Function) {
+            const auto* functionNode = static_cast<const FunctionNode*>(node.get());
+            llvm::Function* fn = setup_entry_function(functionNode);
+            functionsToEmit.emplace_back(functionNode, fn);
         }
     }
 
-    // Second pass: emit functions and global scope
+    // Pass 2: Emit global variables & function bodies
     for (const auto& node : nodes) {
-        switch (node->nodeType()) {
-            case NodeType::Function: {
-                const auto* functionNode = static_cast<const FunctionNode*>(node.get());
-
-                bool isEntryPoint = project && (functionNode->getName() == project->getEntryPoint());
-                llvm::Function* fn = setup_entry_function(functionNode);
-
-                if (isEntryPoint) {
-                    // Entry point can be marked specially if needed.
-                }
-
-                emit_function_body(functionNode, fn);
-                break;
-            }
-            case NodeType::Variable: {
-                const auto* variableNode = static_cast<const VariableNode*>(node.get());
-                emit_variable(variableNode);
-                break;
-            }
-            default:
-                break;
+        if (node->nodeType() == NodeType::Variable) {
+            const auto* variableNode = static_cast<const VariableNode*>(node.get());
+            emit_variable(variableNode);
         }
+    }
+
+    for (const auto& [functionNode, fn] : functionsToEmit) {
+        emit_function_body(functionNode, fn);
     }
 
     if (outputMode == "ll") {
@@ -443,22 +682,18 @@ auto emitter::emit(const std::vector<std::unique_ptr<BaseNode>>& nodes, std::str
     }
 
     if (outputMode == "obj") {
-        if (!emit_object_for_module(module.get(), filepath)) {
-            return;
-        }
+        emit_object_for_module(module.get(), filepath);
         return;
     }
 
     if (outputMode == "exe") {
         std::filesystem::path objPath = std::filesystem::path(filepath).replace_extension(".o");
-        if (!emit_object_for_module(module.get(), objPath.string())) {
-            return;
+        if (emit_object_for_module(module.get(), objPath.string())) {
+            link_executable(objPath.string(), filepath);
         }
-        link_executable(objPath.string(), filepath);
         return;
     }
 
-    // Fallback to emitting LLVM IR if output mode is unknown.
     std::error_code ec;
     llvm::raw_fd_ostream outFile(filepath, ec, llvm::sys::fs::OF_None);
     if (!ec) {

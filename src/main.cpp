@@ -9,6 +9,8 @@
 #include <string_view>
 #include <filesystem>
 #include <fstream>
+#include <algorithm>
+#include <cctype>
 
 std::string_view tokenTypeToString(TokenType type) {
     auto it = TokenToString.find(type);
@@ -103,7 +105,6 @@ void printNode(const BaseNode* node, int depth = 0) {
     if (!node) return;
     std::string indent(depth * 2, ' ');
 
-    // Updated to use the type-safe enum class 'NodeType'
     switch (node->nodeType()) {
         case NodeType::Project: {
             auto* proj = static_cast<const ProjectNode*>(node);
@@ -120,11 +121,9 @@ void printNode(const BaseNode* node, int depth = 0) {
             }
             std::cout << "()\n";
             
-            // Print function parameters
             for (const auto& param : func->getParams()) {
                 printNode(param.get(), depth + 1);
             }
-            // Print function body statements
             for (const auto& stmt : func->getBody()) {
                 printNode(stmt.get(), depth + 1);
             }
@@ -170,7 +169,26 @@ void printNode(const BaseNode* node, int depth = 0) {
         case NodeType::Return: {
             auto* ret = static_cast<const ReturnNode*>(node);
             std::cout << indent << "Return\n";
-            printNode(ret->getExpression(), depth + 1);
+            if (ret->getExpression()) {
+                printNode(ret->getExpression(), depth + 1);
+            }
+            break;
+        }
+        case NodeType::Call: {
+            auto* call = static_cast<const CallNode*>(node);
+            
+            // If your CallNode uses getName() or getFunctionName() for the identifier name:
+            std::cout << indent << "Call: " << call->getName(); 
+            
+            // If return type is stored on the base node via getType() or returnType:
+            if (call->getType() != TokenType::Invalid) {
+                std::cout << " -> " << tokenTypeToString(call->getType());
+            }
+            std::cout << "()\n";
+            
+            for (const auto& arg : call->getArguments()) {
+                printNode(arg.get(), depth + 1);
+            }
             break;
         }
         case NodeType::Literal: {
@@ -211,7 +229,6 @@ void printNode(const BaseNode* node, int depth = 0) {
             break;
         }
         default: {
-            // Cast enum value to unsigned int for hex formatting
             std::cout << indent << "Unknown Node (0x" << std::hex 
                       << static_cast<unsigned int>(node->nodeType()) 
                       << std::dec << ")\n";
