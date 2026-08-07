@@ -1,0 +1,10 @@
+/home/fenn/Desktop/Vulpine/CMakeFiles/intrinsics_gen.dir
+/home/fenn/Desktop/Vulpine/CMakeFiles/vt_gen.dir
+/home/fenn/Desktop/Vulpine/CMakeFiles/omp_gen.dir
+/home/fenn/Desktop/Vulpine/CMakeFiles/acc_gen.dir
+/home/fenn/Desktop/Vulpine/CMakeFiles/target_parser_gen.dir
+/home/fenn/Desktop/Vulpine/CMakeFiles/fennec.dir
+/home/fenn/Desktop/Vulpine/CMakeFiles/edit_cache.dir
+/home/fenn/Desktop/Vulpine/CMakeFiles/rebuild_cache.dir
+/home/fenn/Desktop/Vulpine/Dependencies/SysMacro/CMakeFiles/edit_cache.dir
+/home/fenn/Desktop/Vulpine/Dependencies/SysMacro/CMakeFiles/rebuild_cache.dir

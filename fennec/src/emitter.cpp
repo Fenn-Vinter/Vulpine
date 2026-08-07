@@ -24,9 +24,11 @@ emitter::emitter()
     : context(),
       module(std::make_unique<llvm::Module>("VulpineModule", context)),
       builder(context) {
-    llvm::InitializeNativeTarget();
-    llvm::InitializeNativeTargetAsmPrinter();
-    llvm::InitializeNativeTargetAsmParser();
+    // Initialize all targets to allow cross-compilation target emission
+    llvm::InitializeAllTargets();
+    llvm::InitializeAllTargetMCs();
+    llvm::InitializeAllAsmPrinters();
+    llvm::InitializeAllAsmParsers();
 }
 
 emitter::~emitter() = default;
@@ -316,7 +318,6 @@ auto emitter::emit_unary(const UnaryOpNode* node) -> llvm::Value* {
             llvm::Value* operand = emit_node(node->getOperand());
             if (!operand) return nullptr;
             
-            // Fixed opaque pointer dereferencing
             llvm::Type* loadType = vulpine_type_to_llvm_type(node->getType());
             if (!loadType) {
                 loadType = llvm::Type::getInt32Ty(context);
@@ -602,12 +603,21 @@ static auto normalize_output_format(std::string_view format) -> std::string {
     return normalized;
 }
 
-static auto get_target_machine() -> std::unique_ptr<llvm::TargetMachine> {
-    std::string targetTripleStr = llvm::sys::getDefaultTargetTriple();
+static auto get_target_machine(bool isWindowsTarget) -> std::unique_ptr<llvm::TargetMachine> {
+    std::string targetTripleStr = isWindowsTarget 
+        ? "x86_64-w64-mingw32" 
+        : llvm::sys::getDefaultTargetTriple();
+
+    // Construct the Triple explicitly
+    llvm::Triple triple(targetTripleStr);
+
+    std::error_code ec;
     std::string error;
-    llvm::Triple targetTriple(targetTripleStr);
-    const llvm::Target* target = llvm::TargetRegistry::lookupTarget(targetTriple, error);
+    
+    // Pass the explicit Triple object instead of targetTripleStr
+    const llvm::Target* target = llvm::TargetRegistry::lookupTarget(triple, error);
     if (!target) {
+        llvm::errs() << "Target lookup failed: " << error << "\n";
         return nullptr;
     }
 
@@ -615,13 +625,20 @@ static auto get_target_machine() -> std::unique_ptr<llvm::TargetMachine> {
     auto cpu = "generic";
     auto features = "";
 
+    // Pass triple.str() or the explicit triple object
     return std::unique_ptr<llvm::TargetMachine>(
-        target->createTargetMachine(targetTriple, cpu, features, opt, llvm::Reloc::PIC_)
+        target->createTargetMachine(
+            triple, 
+            cpu, 
+            features, 
+            opt, 
+            llvm::Reloc::PIC_
+        )
     );
 }
 
-static auto emit_object_for_module(llvm::Module* module, std::string_view filepath) -> bool {
-    auto targetMachine = get_target_machine();
+static auto emit_object_for_module(llvm::Module* module, std::string_view filepath, bool isWindowsTarget) -> bool {
+    auto targetMachine = get_target_machine(isWindowsTarget);
     if (!targetMachine) return false;
 
     module->setDataLayout(targetMachine->createDataLayout());
@@ -641,14 +658,20 @@ static auto emit_object_for_module(llvm::Module* module, std::string_view filepa
     return true;
 }
 
-static auto link_executable(std::string_view objectFile, std::string_view exeFile) -> bool {
-    std::string command = std::string("g++ ") + std::string(objectFile) + " -o " + std::string(exeFile);
+static auto link_executable(std::string_view objectFile, std::string_view exeFile, bool isWindowsTarget) -> bool {
+    std::string command;
+    if (isWindowsTarget) {
+        command = std::string("x86_64-w64-mingw32-gcc ") + std::string(objectFile) + " -o " + std::string(exeFile);
+    } else {
+        command = std::string("g++ ") + std::string(objectFile) + " -o " + std::string(exeFile);
+    }
     int result = std::system(command.c_str());
     return result == 0;
 }
 
 auto emitter::emit(const std::vector<std::unique_ptr<BaseNode>>& nodes, std::string_view filepath, std::string_view format) -> void {
     std::string outputMode = normalize_output_format(format);
+    bool isWindowsTarget = (filepath.find(".exe") != std::string_view::npos) || (outputMode == "exe");
 
     // Pass 1: Setup function declarations
     std::vector<std::pair<const FunctionNode*, llvm::Function*>> functionsToEmit;
@@ -682,14 +705,14 @@ auto emitter::emit(const std::vector<std::unique_ptr<BaseNode>>& nodes, std::str
     }
 
     if (outputMode == "obj") {
-        emit_object_for_module(module.get(), filepath);
+        emit_object_for_module(module.get(), filepath, isWindowsTarget);
         return;
     }
 
     if (outputMode == "exe") {
         std::filesystem::path objPath = std::filesystem::path(filepath).replace_extension(".o");
-        if (emit_object_for_module(module.get(), objPath.string())) {
-            link_executable(objPath.string(), filepath);
+        if (emit_object_for_module(module.get(), objPath.string(), isWindowsTarget)) {
+            link_executable(objPath.string(), filepath, isWindowsTarget);
         }
         return;
     }

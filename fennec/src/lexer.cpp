@@ -71,8 +71,8 @@ auto Lexer::lexify(const std::string_view& src) -> Tokens_t* {
     size_t column = 1;
 
     while (i < src.length()) {
-        // 1. Always clear out whitespaces first & track newlines
-        if (std::isspace(src[i])) {
+        // 1. Whitespaces & newline tracking
+        if (std::isspace(static_cast<unsigned char>(src[i]))) {
             if (src[i] == '\n') {
                 line++;
                 column = 1;
@@ -83,12 +83,11 @@ auto Lexer::lexify(const std::string_view& src) -> Tokens_t* {
             continue;
         }
 
-        // 2. Clear out comments
+        // 2. Comments
         if (i + 3 < src.length() && src.substr(i, 4) == "/---") {
             i += 4;
             column += 4;
             
-            // Check if it's a multi-line block comment: /---/
             bool isMultiLine = (i < src.length() && src[i] == '/');
             if (isMultiLine) {
                 i++; // consume inner '/'
@@ -102,10 +101,12 @@ auto Lexer::lexify(const std::string_view& src) -> Tokens_t* {
                     }
                     i++;
                 }
-                i += 4; // consume "---/"
-                column += 4;
+                if (i + 3 < src.length()) {
+                    i += 4; // consume "---/"
+                    column += 4;
+                }
             } else {
-                // Line comment: skip until newline
+                // Single line comment
                 while (i < src.length() && src[i] != '\n') {
                     i++;
                     column++;
@@ -117,26 +118,29 @@ auto Lexer::lexify(const std::string_view& src) -> Tokens_t* {
         bool matched = false;
         size_t tokenStartCol = column;
 
-        // 3. Match Numbers
-        if (!matched && (std::isdigit(src[i]) || (src[i] == '-' && i + 1 < src.length() && std::isdigit(src[i + 1])))) {
+        // 3. Numbers
+        if (!matched && (std::isdigit(static_cast<unsigned char>(src[i])) || 
+            (src[i] == '-' && i + 1 < src.length() && std::isdigit(static_cast<unsigned char>(src[i + 1]))))) {
             size_t prevI = i;
             tokens.push_back(lexNumber(src, i, line, tokenStartCol));
             column += (i - prevI);
             matched = true;
         }
 
-        // 4. Match Identifiers & Keywords
-        if (!matched && (std::isalpha(src[i]) || src[i] == '_')) {
+        // 4. Identifiers & Keywords
+        if (!matched && (std::isalpha(static_cast<unsigned char>(src[i])) || src[i] == '_')) {
             size_t prevI = i;
             tokens.push_back(lexIdentifier(src, i, line, tokenStartCol));
             column += (i - prevI);
             matched = true;
         }
 
-        // 5. Match Strings
+        // 5. Strings
         if (!matched && src[i] == '"') {
             size_t start = i;
-            i++;
+            i++; // skip opening quote
+            column++;
+            
             while (i < src.length() && src[i] != '"') {
                 if (src[i] == '\n') {
                     line++;
@@ -146,16 +150,17 @@ auto Lexer::lexify(const std::string_view& src) -> Tokens_t* {
                 }
                 i++;
             }
+            
             if (i < src.length()) {
-                i++; // Consumes trailing quote safely
+                i++; // skip closing quote
+                column++;
             }
-            size_t length = i - start;
-            tokens.push_back({TokenType::String_Literal, src.substr(start, length), line, tokenStartCol});
-            column += length;
+            
+            tokens.push_back({TokenType::String_Literal, src.substr(start, i - start), line, tokenStartCol});
             matched = true;
         }
 
-        // 6. Match Multi-Character Tokens
+        // 6. Multi-Character Tokens
         if (!matched && i + 1 < src.length()) {
             std::string_view twoChar = src.substr(i, 2);
             if (auto it = StringToToken.find(twoChar); it != StringToToken.end()) {
@@ -166,7 +171,7 @@ auto Lexer::lexify(const std::string_view& src) -> Tokens_t* {
             }
         }
 
-        // 7. Match Single-Character Tokens
+        // 7. Single-Character Tokens
         if (!matched) {
             std::string_view oneChar = src.substr(i, 1);
             if (auto it = StringToToken.find(oneChar); it != StringToToken.end()) {
@@ -177,7 +182,7 @@ auto Lexer::lexify(const std::string_view& src) -> Tokens_t* {
             }
         }
 
-        // 8. Fallback step for raw unmatched characters
+        // 8. Fallback for unmatched raw characters
         if (!matched) {
             i++;
             column++;

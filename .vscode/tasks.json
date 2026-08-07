@@ -1,0 +1,41 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build Fennec",
+      "type": "shell",
+      "command": "ninja",
+      "args": ["-C", "build"],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Compile Test Executable",
+      "type": "shell",
+      "command": "./build/fennec",
+      "args": ["-i", "test/main.vlp", "-o", "test/build/main.exe"],
+      "dependsOn": "Build Fennec",
+      "problemMatcher": []
+    },
+    {
+      "label": "Build & Run Test",
+      "type": "shell",
+      "command": "python3",
+      "args": ["${workspaceFolder}/test/run_test.py", "${workspaceFolder}/test/build/main.exe"],
+      "dependsOn": "Compile Test Executable",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": true
+      },
+      "problemMatcher": []
+    }
+  ]
+}

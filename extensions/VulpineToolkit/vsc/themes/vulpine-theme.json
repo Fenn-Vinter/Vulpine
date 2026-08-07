@@ -1,0 +1,10 @@
+{
+  "name": "keyword.operator",
+  "scope": [
+    "keyword.operator",
+    "punctuation.definition.typeparameters"
+  ],
+  "settings": {
+    "foreground": "#DCDCAA"
+  }
+}

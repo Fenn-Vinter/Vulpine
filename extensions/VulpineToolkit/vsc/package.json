@@ -1,0 +1,89 @@
+{
+  "name": "vulpine-toolkit",
+  "displayName": "Vulpine Toolkit",
+  "description": "A complete development suite for Vulpine powered by the Fennec toolchain.",
+  "version": "0.1.0",
+  "publisher": "fennvinter",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Themes",
+    "Formatters",
+    "Extension Packs"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:vulpine"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "vulpine",
+        "aliases": ["Vulpine", "vulpine"],
+        "extensions": [".vlp", ".vulpine"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "vulpine",
+        "scopeName": "source.vulpine",
+        "path": "./syntaxes/vulpine.tmLanguage.json"
+      }
+    ],
+    "themes": [
+      {
+        "label": "Vulpine Theme",
+        "uiTheme": "vs-dark",
+        "path": "./themes/vulpine-theme.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "vulpine.optimizer.run",
+        "title": "Vulpine: Optimize Selected Code"
+      },
+      {
+        "command": "fennec.build.run",
+        "title": "Fennec: Build & Run Project"
+      }
+    ],
+    "configuration": {
+      "title": "Vulpine & Fennec",
+      "properties": {
+        "fennec.compiler.path": {
+          "type": "string",
+          "default": "",
+          "description": "Custom path to the Fennec compiler binary."
+        },
+        "fennec.lsp.path": {
+          "type": "string",
+          "default": "",
+          "description": "Custom path to the Fennec LSP executable (fennec --lsp)."
+        },
+        "vulpine.optimizer.enableInEditor": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable in-editor static code optimization tools for Vulpine."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -w -p ./",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.22.0",
+    "typescript": "^5.3.0"
+  }
+}

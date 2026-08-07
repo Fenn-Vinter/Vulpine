@@ -7,15 +7,14 @@
 #include <VulpineSettings.hpp>
 #include <format>
 #include <functional>
+#include <JsonRPC/JsonRPC.hpp>
 
-// Helper to generate a short, fast hash string from a file path
 static auto hashFilePath(std::string_view path) -> std::string {
     size_t hashVal = std::hash<std::string_view>{}(path);
     return std::format("{:04X}", static_cast<uint32_t>(hashVal & 0xFFFF));
 }
 
 Parser::Parser() {
-    // Scope initialization deferred until Parse() receives filepath
 }
 
 Parser::~Parser() {
@@ -23,8 +22,6 @@ Parser::~Parser() {
         exitScope();
     }
 }
-
-// --- Centralized Error Handling & Recovery ---
 
 auto Parser::reportError(const TokenEntry& token, std::string_view message) -> void {
     auto formatted = std::format("[PARSER ERROR] [{}:{}:{}] {}",
@@ -49,7 +46,7 @@ auto Parser::synchronize() -> void {
     m_panicMode = false;
     
     if (isAtEnd()) return;
-    consume(); // Always advance past the error-causing token once
+    consume();
 
     while (!isAtEnd()) {
         if (peek().type == TokenType::Semicolon) {
@@ -70,16 +67,14 @@ auto Parser::synchronize() -> void {
     }
 }
 
-// --- Main Parse Entry Point ---
-
 auto Parser::Parse(const Tokens_t* tokens, std::string_view filepath) -> std::vector<std::unique_ptr<BaseNode>> {
+    m_errors.clear();
     m_tokens = tokens;
     m_pos = 0;
     m_hasError = false;
     m_panicMode = false;
-    m_errors.clear();
+    m_currentFilePath = filepath;
 
-    // Seed file path prefix and reset scope tree
     m_currentFileScopePrefix = hashFilePath(filepath);
     
     while (m_currentScope != nullptr) {
@@ -145,8 +140,6 @@ auto Parser::expect(TokenType type) -> bool {
     return false;
 }
 
-// --- Dynamic Path Scope Management ---
-
 auto Parser::enterScope(std::string_view scopeName) -> void {
     std::string newPath;
     if (m_currentScope == nullptr) {
@@ -177,8 +170,6 @@ auto Parser::exitScope() -> void {
     m_currentScope = m_currentScope->parent;
     delete old;
 }
-
-// --- Symbol Definition & Lookup ---
 
 auto Parser::define(std::string_view name, TokenType type) -> SymbolInfo& {
     SymbolInfo* existing = lookup(name);
@@ -213,9 +204,6 @@ auto Parser::lookup(std::string_view name) -> SymbolInfo* {
     return nullptr;
 }
 
-// --- Grammar Parsers ---
-
-// recursive descent parsing function to parse an expression while respecting operator precedence and associativity
 auto Parser::parseExpression() -> std::unique_ptr<BaseNode> {
     if (isAtEnd()) return nullptr;
 
@@ -224,7 +212,6 @@ auto Parser::parseExpression() -> std::unique_ptr<BaseNode> {
 
     if (!left) return nullptr;
 
-    // Early exit check for expression terminators or delimiters
     if (peek().type == TokenType::Semicolon || 
         peek().type == TokenType::Comma || 
         peek().type == TokenType::RightParentheses || 
@@ -304,9 +291,9 @@ auto Parser::parsePrimary() -> std::unique_ptr<BaseNode> {
         unaryNode->setOperand(parsePrimary());
         return unaryNode;
     } else if (token.type == TokenType::LeftParentheses) {
-        consume(); // consume '('
+        consume();
         auto expr = parseExpression();
-        expect(TokenType::RightParentheses); // expect ')'
+        expect(TokenType::RightParentheses);
         return parsePostfixCast(std::move(expr));
     }
 
@@ -432,7 +419,7 @@ auto Parser::canCast(TokenType src, TokenType dst) -> bool {
 }
 
 auto Parser::parseProjectDecl() -> std::unique_ptr<ProjectNode> {
-    consume(); // consume 'project'
+    consume();
     auto node = std::make_unique<ProjectNode>();
 
     if (peek().type == TokenType::Identifier) {
@@ -444,15 +431,15 @@ auto Parser::parseProjectDecl() -> std::unique_ptr<ProjectNode> {
 
     if (expect(TokenType::LeftBrace)) {
         while (!isAtEnd() && peek().type != TokenType::RightBrace) {
-            TokenType keyType = peek().type;
-            std::string_view keyStr = peek().str;
-            consume(); // consume key token
+            const TokenEntry& keyToken = peek();
+            TokenType keyType = keyToken.type;
+            std::string_view keyStr = keyToken.str;
+            consume();
 
-            // Special case: 'ruleset' block does NOT use '=' (ruleset { ... })
             if (keyType == TokenType::Ruleset || keyStr == "ruleset") {
                 if (expect(TokenType::LeftBrace)) {
                     while (!isAtEnd() && peek().type != TokenType::RightBrace) {
-                        std::string_view ruleKeyStr = consume().str; // grab rule name (e.g. "allow_c_style_decl")
+                        std::string_view ruleKeyStr = consume().str;
                         
                         if (!expect(TokenType::Assign)) {
                             synchronize();
@@ -471,60 +458,68 @@ auto Parser::parseProjectDecl() -> std::unique_ptr<ProjectNode> {
                     }
                     expect(TokenType::RightBrace);
                 }
-                continue; // Skip the semicolon check at the end of key-value pairs
-            }
-
-            // All standard key/value settings require '='
-            if (!expect(TokenType::Assign)) {
-                synchronize();
                 continue;
             }
             
             if (keyType == TokenType::Version || keyStr == "version") {
-                if (peek().type == TokenType::String_Literal || peek().type == TokenType::Identifier) {
-                    std::string_view rawStr = consume().str;
-                    if (rawStr.size() >= 2 && rawStr.front() == '"' && rawStr.back() == '"') {
-                        rawStr = rawStr.substr(1, rawStr.size() - 2);
+                if (expect(TokenType::Assign)) {
+                    if (peek().type == TokenType::String_Literal || peek().type == TokenType::Identifier) {
+                        std::string_view rawStr = consume().str;
+                        if (rawStr.size() >= 2 && rawStr.front() == '"' && rawStr.back() == '"') {
+                            rawStr = rawStr.substr(1, rawStr.size() - 2);
+                        }
+                        node->setVulpineVersion(VulpineSettings::VulpineVersions::resolveVersionAlias(rawStr));
+                    } else {
+                        reportError(peek(), "Expected version string literal or alias for 'version' key.");
                     }
-                    node->setVulpineVersion(VulpineSettings::VulpineVersions::resolveVersionAlias(rawStr));
-                } else {
-                    reportError(peek(), "Expected version string literal or alias for 'version' key.");
-                    return nullptr;
                 }
             }
             else if (keyType == TokenType::Arch || keyStr == "arch") {
-                if (peek().type == TokenType::LeftBracket) {
-                    consume(); // Consume '['
-                    while (!isAtEnd() && peek().type != TokenType::RightBracket) {
-                        node->addArchitecture(consume().str);
-                        if (peek().type == TokenType::Comma) consume();
+                if (expect(TokenType::Assign)) {
+                    if (peek().type == TokenType::LeftBracket) {
+                        consume();
+                        while (!isAtEnd() && peek().type != TokenType::RightBracket) {
+                            std::string_view archVal = consume().str;
+                            if (archVal.size() >= 2 && archVal.front() == '"' && archVal.back() == '"') {
+                                archVal = archVal.substr(1, archVal.size() - 2);
+                            }
+                            node->addArchitecture(archVal);
+                            if (peek().type == TokenType::Comma) consume();
+                        }
+                        expect(TokenType::RightBracket);
+                    } else {
+                        std::string_view archVal = consume().str;
+                        if (archVal.size() >= 2 && archVal.front() == '"' && archVal.back() == '"') {
+                            archVal = archVal.substr(1, archVal.size() - 2);
+                        }
+                        node->addArchitecture(archVal);
                     }
-                    expect(TokenType::RightBracket);
-                } else {
-                    node->addArchitecture(consume().str);
                 }
             }
             else if (keyType == TokenType::Entry || keyStr == "entry") {
-                if (peek().type == TokenType::Identifier) {
-                    node->setEntryPoint(consume().str);
-                } else {
-                    reportError(peek(), "Expected valid function identifier for project entry point.");
-                    return nullptr;
+                if (expect(TokenType::Assign)) {
+                    if (peek().type == TokenType::Identifier) {
+                        node->setEntryPoint(consume().str);
+                    } else {
+                        reportError(peek(), "Expected valid function identifier for project entry point.");
+                    }
                 }
             }
             else if (keyType == TokenType::Format || keyStr == "format") {
-                if (peek().type == TokenType::String_Literal || peek().type == TokenType::Identifier) {
-                    std::string_view formatValue = consume().str;
-                    if (formatValue.size() >= 2 && formatValue.front() == '"' && formatValue.back() == '"') {
-                        formatValue = formatValue.substr(1, formatValue.size() - 2);
+                if (expect(TokenType::Assign)) {
+                    if (peek().type == TokenType::String_Literal || peek().type == TokenType::Identifier) {
+                        std::string_view formatValue = consume().str;
+                        if (formatValue.size() >= 2 && formatValue.front() == '"' && formatValue.back() == '"') {
+                            formatValue = formatValue.substr(1, formatValue.size() - 2);
+                        }
+                        node->setOutputType(formatValue);
+                    } else {
+                        reportError(peek(), "Expected string literal or identifier for 'format' key.");
                     }
-                    node->setOutputType(formatValue);
-                } else {
-                    reportError(peek(), "Expected string literal or identifier for 'format' key.");
                 }
             }
             else {
-                reportError(peek(), std::format("Unknown project configuration key '{}'", keyStr));
+                reportError(keyToken, std::format("Unknown project configuration key '{}'", keyStr));
                 if (!isAtEnd() && peek().type != TokenType::Semicolon) {
                     consume();
                 }
@@ -537,12 +532,9 @@ auto Parser::parseProjectDecl() -> std::unique_ptr<ProjectNode> {
 
     if (!VulpineSettings::VulpineVersions::isValidVersion(node->getVulpineVersion())) {
         reportError(peek(), std::format("Invalid or unsupported Vulpine version: '{}'", node->getVulpineVersion()));
-        return nullptr;
     }
 
-    // Bind project instance pointer so variable rules function properly
     m_activeProject = node.get();
-
     return node;
 }
 
@@ -551,9 +543,9 @@ auto Parser::parseStatement() -> std::unique_ptr<BaseNode> {
     
     if (peek().type == TokenType::Return) {
         const TokenEntry& returnToken = peek();
-        consume(); // eat 'return'
-        auto expr = parseExpression(); // gather everything up to the semicolon
-        expect(TokenType::Semicolon); // eat ';'
+        consume();
+        auto expr = parseExpression();
+        expect(TokenType::Semicolon);
 
         if (expr && m_currentFunctionReturnType != TokenType::Invalid) {
             TokenType exprType = expr->getType();
@@ -637,7 +629,12 @@ auto Parser::parseVariableDecl() -> std::unique_ptr<VariableNode> {
         define(name, deducedType);
         auto varNode = std::make_unique<VariableNode>(std::string(name));
         varNode->setDeclaredType(deducedType);
-        if (expect(TokenType::Assign)) varNode->setValue(parseExpression());
+        
+        if (peek().type == TokenType::Assign) {
+            consume();
+            varNode->setValue(parseExpression());
+        }
+        
         expect(TokenType::Semicolon);
         return varNode;
     } 
@@ -662,19 +659,30 @@ auto Parser::parseVariableDecl() -> std::unique_ptr<VariableNode> {
         }
 
         TokenType deducedType = TokenType::AutoWild;
-        if (expect(TokenType::Colon)) {
+
+        // Optional type annotation: : type
+        if (peek().type == TokenType::Colon) {
+            consume(); // consume ':'
             if (TokenUtils::isTypedef(peek().type)) {
                 deducedType = consume().type;
             } else if (peek().type == TokenType::Identifier) {
                 SymbolInfo* info = lookup(consume().str);
                 if (info) deducedType = info->type;
+            } else {
+                reportError(peek(), "Expected valid type after ':' in variable declaration.");
             }
         }
         
         define(name, deducedType);
         auto varNode = std::make_unique<VariableNode>(std::string(name));
         varNode->setDeclaredType(deducedType);
-        if (expect(TokenType::Assign)) varNode->setValue(parseExpression());
+
+        // Optional initializer assignment: = expression
+        if (peek().type == TokenType::Assign) {
+            consume(); // consume '='
+            varNode->setValue(parseExpression());
+        }
+
         expect(TokenType::Semicolon);
         return varNode;
     }
@@ -685,7 +693,7 @@ auto Parser::parseVariableDecl() -> std::unique_ptr<VariableNode> {
 }
 
 auto Parser::parseIfStatement() -> std::unique_ptr<BaseNode> {
-    consume(); // consume 'if'
+    consume();
 
     if (!expect(TokenType::LeftParentheses)) {
         return nullptr;
@@ -737,7 +745,7 @@ auto Parser::parseIfStatement() -> std::unique_ptr<BaseNode> {
 }
 
 auto Parser::parseFunctionDecl() -> std::unique_ptr<BaseNode> {
-    consume(); // Consume 'fn'
+    consume();
 
     if (peek().type != TokenType::Identifier) {
         reportError(peek(), "Expected function name after 'fn'.");
@@ -751,7 +759,6 @@ auto Parser::parseFunctionDecl() -> std::unique_ptr<BaseNode> {
     funcNode->setName(std::string(fnName));
     enterScope(fnName);
 
-    // Expect parameter list ()
     if (!expect(TokenType::LeftParentheses)) {
         exitScope();
         return nullptr;
@@ -815,7 +822,6 @@ auto Parser::parseFunctionDecl() -> std::unique_ptr<BaseNode> {
     TokenType previousReturnType = m_currentFunctionReturnType;
     m_currentFunctionReturnType = funcNode->getReturnType();
 
-    // Parse function body block { ... }
     if (peek().type == TokenType::LeftBrace) {
         auto body = parseBlock();
         if (body) {

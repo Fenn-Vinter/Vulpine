@@ -1,7 +1,8 @@
 {
-    "cmake.copyCompileCommands": "${workspaceFolder}",
-    "clangd.arguments": [
-        "--query-driver=C:\\msys64\\ucrt64\\bin\\g*.exe,D:\\msys64\\ucrt64\\bin\\g*.exe,/usr/bin/g*",
-        "--compile-commands-dir=${workspaceFolder}/build"
-    ]
+  "cmake.copyCompileCommands": "${workspaceFolder}/compile_commands.json",
+  "clangd.arguments": [
+    "--query-driver=C:\\msys64\\ucrt64\\bin\\g*.exe,D:\\msys64\\ucrt64\\bin\\g*.exe,/usr/bin/g*,/usr/bin/clang*",
+    "--compile-commands-dir=${workspaceFolder}/build"
+  ],
+  "cmake.configureArgs": [] 
 }

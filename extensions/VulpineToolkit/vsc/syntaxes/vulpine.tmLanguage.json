@@ -1,0 +1,268 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Vulpine",
+  "scopeName": "source.vulpine",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#functions" },
+    { "include": "#variables" },
+    { "include": "#project-keywords" },
+    { "include": "#reserved-tokens" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.vulpine",
+          "match": "/--.*$"
+        },
+        {
+          "name": "comment.block.vulpine",
+          "begin": "/--",
+          "end": "--/"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.vulpine",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.vulpine",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.vulpine",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.vulpine",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.backticks.vulpine",
+          "begin": "`",
+          "end": "`",
+          "patterns": [
+            {
+              "name": "constant.character.escape.vulpine",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.vulpine",
+          "match": "\\b0[xX][0-9a-fA-F_]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.vulpine",
+          "match": "\\b0[bB][01_]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.vulpine",
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*([eE][+-]?[0-9]+)?\\b"
+        },
+        {
+          "name": "constant.numeric.decimal.vulpine",
+          "match": "\\b[0-9][0-9_]*\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.vulpine",
+          "match": "\\b(if|else|while|for|loop|break|continue|return|route|waypoint)\\b"
+        },
+        {
+          "name": "keyword.other.declaration.vulpine",
+          "match": "\\b(fn|let|const|class|export|print)\\b"
+        }
+      ]
+    },
+    "project-keywords": {
+      "patterns": [
+        {
+          "name": "keyword.other.project.vulpine",
+          "match": "\\b(project|version|arch|entry|publisher|output|abi|optimization|ruleset|format|linker)\\b"
+        },
+        {
+          "name": "keyword.other.ruleset.vulpine",
+          "match": "\\b(allow_c_style_decl|decline_vulpine_style_decl|decline_syscalls|decline_inline_languages|decline_vulpine_standard_library|decline_pointer_decleration)\\b"
+        }
+      ]
+    },
+    "reserved-tokens": {
+      "patterns": [
+        {
+          "name": "constant.other.reserved.vulpine",
+          "match": "%(EOF|INVALID|Identifier|Int_Literal|UInt_Literal|Float_Literal|String_Literal|Char_Literal|Hex_Literal|Binary_Literal)%"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "entity.name.type.primitive.vulpine",
+          "match": "\\b(iauto|int|i8|i16|i32|i64|i128|uauto|uint|u8|u16|u32|u64|u128|wauto|wild|w8|w16|w32|w64|w128|fauto|float|f16|f32|f64|double|f128|bool|bit|char|byte|string)\\b"
+        },
+        {
+          "name": "entity.name.type.user-defined.vulpine",
+          "match": "\\b[A-Z][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.vulpine",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.null.vulpine",
+          "match": "\\b(nullptr)\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "meta.function.declaration.vulpine",
+          "begin": "\\b(fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "beginCaptures": {
+            "1": { "name": "keyword.other.declaration.vulpine" },
+            "2": { "name": "entity.name.function.vulpine" }
+          },
+          "end": "(?=\\{)",
+          "patterns": [
+            { "include": "#generic-parameters" },
+            { "include": "#function-parameters" },
+            { "include": "#return-type" }
+          ]
+        }
+      ]
+    },
+    "generic-parameters": {
+      "patterns": [
+        {
+          "begin": "<",
+          "end": ">",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.typeparameters.begin.vulpine" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.typeparameters.end.vulpine" }
+          },
+          "patterns": [
+            {
+              "match": "([a-zA-Z_][a-zA-Z0-9_]*)\\s*:\\s*([a-zA-Z_][a-zA-Z0-9_]*)",
+              "captures": {
+                "1": { "name": "variable.parameter.generic.vulpine" },
+                "2": { "name": "entity.name.type.vulpine" }
+              }
+            },
+            { "include": "#types" }
+          ]
+        }
+      ]
+    },
+    "function-parameters": {
+      "patterns": [
+        {
+          "begin": "\\(",
+          "end": "\\)",
+          "patterns": [
+            {
+              "match": "\\b(const|let)?\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\s*:\\s*([a-zA-Z_][a-zA-Z0-9_]*)",
+              "captures": {
+                "1": { "name": "keyword.other.declaration.vulpine" },
+                "2": { "name": "variable.parameter.vulpine" },
+                "3": { "name": "entity.name.type.vulpine" }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "return-type": {
+      "patterns": [
+        {
+          "match": ":\\s*([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "entity.name.type.return.vulpine" }
+          }
+        }
+      ]
+    },
+    "variables": {
+      "patterns": [
+        {
+          "name": "meta.variable.declaration.vulpine",
+          "begin": "\\b(let|const)\\b\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "beginCaptures": {
+            "1": { "name": "keyword.other.declaration.vulpine" },
+            "2": { "name": "variable.other.assignment.vulpine" }
+          },
+          "end": ";",
+          "patterns": [
+            {
+              "name": "meta.inheritance.vulpine",
+              "begin": ":",
+              "end": "(?==|\\{|;)",
+              "patterns": [
+                { "include": "#types" },
+                {
+                  "match": "[a-zA-Z_][a-zA-Z0-9_]*",
+                  "name": "variable.other.inherited.vulpine"
+                }
+              ]
+            },
+            {
+              "name": "meta.initializer.vulpine",
+              "begin": "\\{",
+              "end": "\\}",
+              "patterns": [
+                { "include": "#numbers" },
+                { "include": "#constants" }
+              ]
+            },
+            {
+              "name": "meta.assignment.vulpine",
+              "begin": "=",
+              "end": "(?=;)",
+              "patterns": [
+                { "include": "$self" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.vulpine",
+          "match": "(\\+=|-=\\|\\*=|/=|%=|\\+\\+|--|//|\\*\\*|@|\\^|==|!=|!|<=|>=|\\<|\\>|&&|&\\||&|\\|\\||\\||\\+|-|\\*|/|%|=)"
+        }
+      ]
+    }
+  }
+}

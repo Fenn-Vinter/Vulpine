@@ -1,0 +1,38 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "linux-nobara",
+      "displayName": "Linux (Nobara)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "windows-msys2",
+      "displayName": "Windows (MSYS2)",
+      "description": "Uses MSYS2 LLVM toolchain",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "LLVM_DIR": "C:/msys64/ucrt64/lib/cmake/llvm",
+        "MLIR_DIR": "C:/msys64/ucrt64/lib/cmake/mlir",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    }
+  ]
+}

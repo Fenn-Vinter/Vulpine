@@ -50,7 +50,8 @@ private:
 
     // --- File & Provenance Tracking ---
     uint32_t m_currentFileId = 0;
-    std::string m_currentFileScopePrefix; // e.g. "A7F9"
+    std::string m_currentFileScopePrefix{}; // e.g. "A7F9"
+    std::string m_currentFilePath{};
 
     // --- Scope Management ---
     Scope* m_currentScope = nullptr;

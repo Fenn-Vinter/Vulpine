@@ -9,8 +9,10 @@
 #include <string_view>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <JsonRPC/JsonRPC.hpp>
 
 std::string_view tokenTypeToString(TokenType type) {
     auto it = TokenToString.find(type);
@@ -26,6 +28,7 @@ void print_help() {
     std::cout << "  -o <path>    Set output filepath or directory for generated IR (Optional, default: out.ll)\n";
     std::cout << "  -d           Enable debug mode\n";
     std::cout << "  -h           Show this help message\n";
+    std::cout << "  -lsp         Starts the Fennec compiler as a Language Server Protocol\n";
 }
 
 static auto project_output_format(const std::vector<std::unique_ptr<BaseNode>>& nodes) -> std::string_view {
@@ -176,11 +179,7 @@ void printNode(const BaseNode* node, int depth = 0) {
         }
         case NodeType::Call: {
             auto* call = static_cast<const CallNode*>(node);
-            
-            // If your CallNode uses getName() or getFunctionName() for the identifier name:
             std::cout << indent << "Call: " << call->getName(); 
-            
-            // If return type is stored on the base node via getType() or returnType:
             if (call->getType() != TokenType::Invalid) {
                 std::cout << " -> " << tokenTypeToString(call->getType());
             }
@@ -237,12 +236,160 @@ void printNode(const BaseNode* node, int depth = 0) {
     }
 }
 
+static std::string unescapeJsonString(std::string_view input) {
+    std::string result;
+    result.reserve(input.size());
+    for (size_t i = 0; i < input.size(); ++i) {
+        if (input[i] == '\\' && i + 1 < input.size()) {
+            switch (input[i + 1]) {
+                case 'n':  result += '\n'; ++i; break;
+                case 'r':  result += '\r'; ++i; break;
+                case 't':  result += '\t'; ++i; break;
+                case '"':  result += '"';  ++i; break;
+                case '\\': result += '\\'; ++i; break;
+                default:   result += input[i]; break;
+            }
+        } else {
+            result += input[i];
+        }
+    }
+    return result;
+}
+
+static void publishDiagnostics(std::string_view rawParams) {
+    std::string uri;
+    auto uriPos = rawParams.find("\"uri\"");
+    if (uriPos != std::string_view::npos) {
+        auto start = rawParams.find('"', uriPos + 5);
+        if (start != std::string_view::npos) {
+            auto end = rawParams.find('"', start + 1);
+            if (end != std::string_view::npos) {
+                uri = std::string(rawParams.substr(start + 1, end - start - 1));
+            }
+        }
+    }
+    if (uri.empty()) return;
+
+    std::string source;
+    auto textPos = rawParams.find("\"text\"");
+    if (textPos != std::string_view::npos) {
+        auto start = rawParams.find('"', textPos + 6);
+        if (start != std::string_view::npos) {
+            size_t end = start + 1;
+            while (end < rawParams.size()) {
+                if (rawParams[end] == '\\') {
+                    end += 2;
+                    continue;
+                }
+                if (rawParams[end] == '"') break;
+                end++;
+            }
+            if (end < rawParams.size()) {
+                std::string rawSource = std::string(rawParams.substr(start + 1, end - start - 1));
+                source = unescapeJsonString(rawSource);
+            }
+        }
+    }
+
+    if (source.empty()) {
+        std::string filePath = uri;
+        if (filePath.starts_with("file://")) filePath = filePath.substr(7);
+        std::ifstream file(filePath);
+        if (file.is_open()) {
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            source = buffer.str();
+        }
+    }
+
+    auto fennec = Fennec();
+    auto* tokens = fennec.LexerInstance()->lexify(source);
+    auto parser = fennec.ParserInstance();
+    auto AST = parser->Parse(tokens, uri);
+
+    std::string diagList = "[";
+    if (parser->hasErrors()) {
+        bool first = true;
+        for (const auto& error : parser->getErrors()) {
+            if (!first) diagList += ",";
+            first = false;
+            diagList += std::format(
+                "{{"
+                "\"range\":{{\"start\":{{\"line\":0,\"character\":0}},\"end\":{{\"line\":0,\"character\":100}}}},"
+                "\"severity\":1,"
+                "\"source\":\"fennec\","
+                "\"message\":\"{}\""
+                "}}",
+                JsonRPC::escape_json(error)
+            );
+        }
+    }
+    diagList += "]";
+
+    std::string paramsJson = std::format(
+        "{{\"uri\": \"{}\", \"diagnostics\": {}}}",
+        JsonRPC::escape_json(uri),
+        diagList
+    );
+
+    JsonRPC::Request notification(std::string_view("textDocument/publishDiagnostics"), std::string_view(paramsJson));
+    std::cout << notification.get_format() << std::flush;
+}
+
+static void runLspLoop() {
+    std::cin.sync_with_stdio(false);
+    std::cout.sync_with_stdio(false);
+
+    while (std::cin.good()) {
+        auto bodyOpt = JsonRPC::StreamParser::read_next_frame();
+        if (!bodyOpt.has_value()) {
+            break;
+        }
+
+        auto reqOpt = JsonRPC::StreamParser::parse_request(*bodyOpt);
+        if (!reqOpt.has_value()) {
+            continue;
+        }
+
+        const auto& req = *reqOpt;
+
+        std::string dummyBody = req.get_body();
+        
+        if (dummyBody.find("\"initialize\"") != std::string::npos) {
+            JsonRPC::Response res;
+            res.set_result(
+                "{\n"
+                "  \"capabilities\": {\n"
+                "    \"textDocumentSync\": 1,\n"
+                "    \"hoverProvider\": false\n"
+                "  }\n"
+                "}"
+            );
+            std::cout << res.get_format() << std::flush;
+        } 
+        else if (dummyBody.find("textDocument/didOpen") != std::string::npos ||
+                 dummyBody.find("textDocument/didChange") != std::string::npos ||
+                 dummyBody.find("textDocument/didSave") != std::string::npos) {
+            publishDiagnostics(dummyBody);
+        }
+        else if (dummyBody.find("\"shutdown\"") != std::string::npos) {
+            JsonRPC::Response res;
+            res.set_result("null");
+            std::cout << res.get_format() << std::flush;
+        }
+        else if (dummyBody.find("\"exit\"") != std::string::npos) {
+            break;
+        }
+    }
+}
+
 auto main(int argc, char* argv[]) -> int {
     if (argc <= 1) {
         print_help();
         return 0;
     }
 
+    bool isLSP = false;
     CompilerOptions options;
     auto args = std::span(argv, argc);
 
@@ -271,11 +418,19 @@ auto main(int argc, char* argv[]) -> int {
                 std::cerr << "Error: -o requires a file path value.\n";
                 return 1;
             }
-        } 
+        }
+        else if (arg == "-lsp" || arg == "--lsp") {
+            isLSP = true;
+        }
         else {
             std::cerr << "Error: Unknown option '" << arg << "'. Run with -h for help.\n";
             return 1;
         }
+    }
+
+    if (isLSP) {
+        runLspLoop();
+        return 0;
     }
 
     if (options.input_file.empty()) {

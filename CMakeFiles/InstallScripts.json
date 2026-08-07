@@ -1,0 +1,8 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/fenn/Desktop/Vulpine/cmake_install.cmake",
+		"/home/fenn/Desktop/Vulpine/Dependencies/SysMacro/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

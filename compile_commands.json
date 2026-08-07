@@ -1,0 +1,26 @@
+[
+{
+  "directory": "/home/fenn/Desktop/Vulpine/build",
+  "command": "/usr/bin/c++ -D_GLIBCXX_USE_CXX11_ABI=1 -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/home/fenn/Desktop/Vulpine/fennec/includes -I/home/fenn/Desktop/Vulpine/includes -I/home/fenn/Desktop/Vulpine/Dependencies/SysMacro/include -O3 -DNDEBUG -std=gnu++23 -o CMakeFiles/fennec.dir/fennec/src/lexer.cpp.o -c /home/fenn/Desktop/Vulpine/fennec/src/lexer.cpp",
+  "file": "/home/fenn/Desktop/Vulpine/fennec/src/lexer.cpp",
+  "output": "/home/fenn/Desktop/Vulpine/build/CMakeFiles/fennec.dir/fennec/src/lexer.cpp.o"
+},
+{
+  "directory": "/home/fenn/Desktop/Vulpine/build",
+  "command": "/usr/bin/c++ -D_GLIBCXX_USE_CXX11_ABI=1 -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/home/fenn/Desktop/Vulpine/fennec/includes -I/home/fenn/Desktop/Vulpine/includes -I/home/fenn/Desktop/Vulpine/Dependencies/SysMacro/include -O3 -DNDEBUG -std=gnu++23 -o CMakeFiles/fennec.dir/fennec/src/parser.cpp.o -c /home/fenn/Desktop/Vulpine/fennec/src/parser.cpp",
+  "file": "/home/fenn/Desktop/Vulpine/fennec/src/parser.cpp",
+  "output": "/home/fenn/Desktop/Vulpine/build/CMakeFiles/fennec.dir/fennec/src/parser.cpp.o"
+},
+{
+  "directory": "/home/fenn/Desktop/Vulpine/build",
+  "command": "/usr/bin/c++ -D_GLIBCXX_USE_CXX11_ABI=1 -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/home/fenn/Desktop/Vulpine/fennec/includes -I/home/fenn/Desktop/Vulpine/includes -I/home/fenn/Desktop/Vulpine/Dependencies/SysMacro/include -O3 -DNDEBUG -std=gnu++23 -o CMakeFiles/fennec.dir/fennec/src/emitter.cpp.o -c /home/fenn/Desktop/Vulpine/fennec/src/emitter.cpp",
+  "file": "/home/fenn/Desktop/Vulpine/fennec/src/emitter.cpp",
+  "output": "/home/fenn/Desktop/Vulpine/build/CMakeFiles/fennec.dir/fennec/src/emitter.cpp.o"
+},
+{
+  "directory": "/home/fenn/Desktop/Vulpine/build",
+  "command": "/usr/bin/c++ -D_GLIBCXX_USE_CXX11_ABI=1 -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/home/fenn/Desktop/Vulpine/fennec/includes -I/home/fenn/Desktop/Vulpine/includes -I/home/fenn/Desktop/Vulpine/Dependencies/SysMacro/include -O3 -DNDEBUG -std=gnu++23 -o CMakeFiles/fennec.dir/src/main.cpp.o -c /home/fenn/Desktop/Vulpine/src/main.cpp",
+  "file": "/home/fenn/Desktop/Vulpine/src/main.cpp",
+  "output": "/home/fenn/Desktop/Vulpine/build/CMakeFiles/fennec.dir/src/main.cpp.o"
+}
+]
