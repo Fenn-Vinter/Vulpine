@@ -15,14 +15,23 @@
   ],
   "main": "./out/extension.js",
   "activationEvents": [
-    "onLanguage:vulpine"
+    "onLanguage:vulpine",
+    "onCommand:fennec.build",
+    "onCommand:fennec.build.run",
+    "onCommand:vulpine.optimizer.run"
   ],
   "contributes": {
     "languages": [
       {
         "id": "vulpine",
-        "aliases": ["Vulpine", "vulpine"],
-        "extensions": [".vlp", ".vulpine"],
+        "aliases": [
+          "Vulpine",
+          "vulpine"
+        ],
+        "extensions": [
+          ".vlp",
+          ".vulpine"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -48,6 +57,10 @@
       {
         "command": "fennec.build.run",
         "title": "Fennec: Build & Run Project"
+      },
+      {
+        "command": "fennec.build",
+        "title": "Fennec: Build Project"
       }
     ],
     "configuration": {
@@ -83,7 +96,7 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
-    "@vscode/vsce": "^2.22.0",
+    "@vscode/vsce": "^3.9.2",
     "typescript": "^5.3.0"
   }
 }

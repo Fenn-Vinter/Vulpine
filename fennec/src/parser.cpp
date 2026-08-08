@@ -14,8 +14,7 @@ static auto hashFilePath(std::string_view path) -> std::string {
     return std::format("{:04X}", static_cast<uint32_t>(hashVal & 0xFFFF));
 }
 
-Parser::Parser() {
-}
+Parser::Parser() {}
 
 Parser::~Parser() {
     while (m_currentScope != nullptr) {
@@ -34,6 +33,15 @@ auto Parser::reportError(const TokenEntry& token, std::string_view message) -> v
     m_hasError = true;
 }
 
+auto Parser::reportWarning(const TokenEntry& token, std::string_view message) -> void {
+    auto formatted = std::format("[PARSER WARNING] [{}:{}:{}] {}",
+                                 m_currentFileScopePrefix,
+                                 token.line,
+                                 token.column,
+                                 message);
+    std::cerr << formatted << "\n";
+}
+
 auto Parser::getErrors() const -> const std::vector<std::string>& {
     return m_errors;
 }
@@ -44,7 +52,6 @@ auto Parser::hasErrors() const -> bool {
 
 auto Parser::synchronize() -> void {
     m_panicMode = false;
-    
     if (isAtEnd()) return;
     consume();
 
@@ -74,9 +81,8 @@ auto Parser::Parse(const Tokens_t* tokens, std::string_view filepath) -> std::ve
     m_hasError = false;
     m_panicMode = false;
     m_currentFilePath = filepath;
-
     m_currentFileScopePrefix = hashFilePath(filepath);
-    
+
     while (m_currentScope != nullptr) {
         exitScope();
     }
@@ -132,10 +138,8 @@ auto Parser::expect(TokenType type) -> bool {
 
     auto it = TokenToString.find(type);
     std::string_view typeName = (it != TokenToString.end()) ? it->second : "Unknown";
-    
-    reportError(peek(), std::format("Expected token type '{}', got '{}'", 
-                                   typeName, 
-                                   peek().str));
+
+    reportError(peek(), std::format("Expected token type '{}', got '{}'", typeName, peek().str));
     m_panicMode = true;
     return false;
 }
@@ -171,7 +175,7 @@ auto Parser::exitScope() -> void {
     delete old;
 }
 
-auto Parser::define(std::string_view name, TokenType type) -> SymbolInfo& {
+auto Parser::define(std::string_view name, TokenType type, bool initialized) -> SymbolInfo& {
     SymbolInfo* existing = lookup(name);
     if (existing != nullptr) {
         reportError(peek(), std::format("Redeclaration error: Symbol '{}' already exists at scope '{}'", name, existing->fqn));
@@ -185,7 +189,8 @@ auto Parser::define(std::string_view name, TokenType type) -> SymbolInfo& {
         .name = std::string(name),
         .fqn = std::move(fqn),
         .type = type,
-        .fileId = m_currentFileId
+        .fileId = m_currentFileId,
+        .isInitialized = initialized
     };
 
     auto [it, inserted] = m_currentScope->symbols.emplace(name, std::move(info));
@@ -195,7 +200,7 @@ auto Parser::define(std::string_view name, TokenType type) -> SymbolInfo& {
 auto Parser::lookup(std::string_view name) -> SymbolInfo* {
     Scope* search = m_currentScope;
     while (search != nullptr) {
-        auto it = search->symbols.find(name);
+        auto it = search->symbols.find(std::string(name));
         if (it != search->symbols.end()) {
             return &it->second;
         }
@@ -204,20 +209,57 @@ auto Parser::lookup(std::string_view name) -> SymbolInfo* {
     return nullptr;
 }
 
+auto Parser::parsePostfixAccess(std::unique_ptr<BaseNode> expr) -> std::unique_ptr<BaseNode> {
+    while (peek().type == TokenType::LeftBracket) {
+        consume();
+        auto indexExpr = parseExpression();
+        expect(TokenType::RightBracket);
+
+        auto node = std::make_unique<IndexAccessNode>();
+        node->setTarget(std::move(expr));
+        node->setIndex(std::move(indexExpr));
+        expr = std::move(node);
+    }
+    return expr;
+}
+
 auto Parser::parseExpression() -> std::unique_ptr<BaseNode> {
     if (isAtEnd()) return nullptr;
 
-    auto left = parsePrimary();
+    auto left = parsePostfixAccess(parsePrimary());
     left = parsePostfixCast(std::move(left));
 
     if (!left) return nullptr;
 
-    if (peek().type == TokenType::Semicolon || 
-        peek().type == TokenType::Comma || 
-        peek().type == TokenType::RightParentheses || 
-        peek().type == TokenType::RightBrace || 
+    if (peek().type == TokenType::Semicolon ||
+        peek().type == TokenType::Comma ||
+        peek().type == TokenType::RightParentheses ||
+        peek().type == TokenType::RightBrace ||
+        peek().type == TokenType::RightBracket ||
         peek().type == TokenType::Eof) {
         return left;
+    }
+
+    if (peek().type == TokenType::Assign) {
+        auto opToken = consume();
+        auto right = parseExpression();
+
+        if (auto* varRef = dynamic_cast<VariableRefNode*>(left.get())) {
+            if (auto symbol = lookup(varRef->getName())) {
+                symbol->isInitialized = true;
+            }
+        } else if (auto* indexAccess = dynamic_cast<IndexAccessNode*>(left.get())) {
+            if (auto* varRef = dynamic_cast<VariableRefNode*>(indexAccess->getTarget())) {
+                if (auto symbol = lookup(varRef->getName())) {
+                    symbol->isInitialized = true;
+                }
+            }
+        }
+
+        auto binOpNode = std::make_unique<BinaryOpNode>(opToken.type);
+        binOpNode->setLeft(std::move(left));
+        binOpNode->setRight(std::move(right));
+        return binOpNode;
     }
 
     if ((TokenUtils::isOperator(peek().type) || TokenUtils::isComparativeOperator(peek().type)) && peek().type != TokenType::NOT) {
@@ -241,16 +283,53 @@ auto Parser::parseExpression() -> std::unique_ptr<BaseNode> {
     return left;
 }
 
+auto Parser::parseArrayLiteral() -> std::unique_ptr<ArrayNode> {
+    consume(); // Consume '['
+    auto arrayNode = std::make_unique<ArrayNode>();
+
+    if (peek().type != TokenType::RightBracket) {
+        while (!isAtEnd()) {
+            auto elem = parseExpression();
+            if (elem) {
+                arrayNode->addValue(std::move(elem));
+            }
+
+            if (peek().type == TokenType::Comma) {
+                consume();
+                continue;
+            }
+            break;
+        }
+    }
+
+    expect(TokenType::RightBracket);
+    return arrayNode;
+}
+
 auto Parser::parsePrimary() -> std::unique_ptr<BaseNode> {
     if (isAtEnd()) return nullptr;
 
     const TokenEntry& token = peek();
-    
+
+    if (token.type == TokenType::LeftBracket) {
+        return parseArrayLiteral();
+    }
+
+    if (token.type == TokenType::Address || TokenUtils::isUnaryOperator(token.type)) {
+        consume();
+        auto unaryNode = std::make_unique<UnaryOpNode>(token.type);
+        unaryNode->setOperand(parsePrimary());
+        return unaryNode;
+    }
+
     if (token.type == TokenType::Identifier) {
         consume();
         auto varRef = std::make_unique<VariableRefNode>(token.str);
-        if (auto symbol = lookup(token.str); symbol) {
+        if (auto symbol = lookup(token.str)) {
             varRef->setResolvedType(symbol->type);
+            if (!symbol->isInitialized) {
+                reportError(token, std::format("Use of uninitialized variable '{}'", token.str));
+            }
         }
         if (peek().type == TokenType::LeftParentheses) {
             return parseCall(std::move(varRef));
@@ -277,19 +356,11 @@ auto Parser::parsePrimary() -> std::unique_ptr<BaseNode> {
             case TokenType::Char_Literal:
                 literalType = TokenType::Char;
                 break;
-            case TokenType::String_Literal:
-                literalType = TokenType::String;
-                break;
             default:
                 break;
         }
 
         return std::make_unique<LiteralNode>(literalType, std::move(rawValue));
-    } else if (TokenUtils::isUnaryOperator(token.type)) {
-        consume();
-        auto unaryNode = std::make_unique<UnaryOpNode>(token.type);
-        unaryNode->setOperand(parsePrimary());
-        return unaryNode;
     } else if (token.type == TokenType::LeftParentheses) {
         consume();
         auto expr = parseExpression();
@@ -362,7 +433,7 @@ auto Parser::deriveBinaryResultType(const BaseNode* left, const BaseNode* right,
     }
 
     if (TokenUtils::isComparativeOperator(op)) {
-        if (leftType == rightType && 
+        if (leftType == rightType &&
             (TokenUtils::isNumericType(leftType) || leftType == TokenType::String_Literal || leftType == TokenType::Bool)) {
             return TokenType::Bool;
         }
@@ -440,19 +511,19 @@ auto Parser::parseProjectDecl() -> std::unique_ptr<ProjectNode> {
                 if (expect(TokenType::LeftBrace)) {
                     while (!isAtEnd() && peek().type != TokenType::RightBrace) {
                         std::string_view ruleKeyStr = consume().str;
-                        
+
                         if (!expect(TokenType::Assign)) {
                             synchronize();
                             continue;
                         }
-                        
+
                         if (peek().type == TokenType::Bool || peek().type == TokenType::True || peek().type == TokenType::False || peek().str == "true" || peek().str == "false") {
                             bool ruleValue = (peek().type == TokenType::True || peek().str == "true");
                             consume();
                             node->setRule(ruleKeyStr, ruleValue);
                         } else {
                             reportError(peek(), "Expected boolean value for rule definition.");
-                            consume(); 
+                            consume();
                         }
                         expect(TokenType::Semicolon);
                     }
@@ -460,7 +531,7 @@ auto Parser::parseProjectDecl() -> std::unique_ptr<ProjectNode> {
                 }
                 continue;
             }
-            
+
             if (keyType == TokenType::Version || keyStr == "version") {
                 if (expect(TokenType::Assign)) {
                     if (peek().type == TokenType::String_Literal || peek().type == TokenType::Identifier) {
@@ -473,8 +544,7 @@ auto Parser::parseProjectDecl() -> std::unique_ptr<ProjectNode> {
                         reportError(peek(), "Expected version string literal or alias for 'version' key.");
                     }
                 }
-            }
-            else if (keyType == TokenType::Arch || keyStr == "arch") {
+            } else if (keyType == TokenType::Arch || keyStr == "arch") {
                 if (expect(TokenType::Assign)) {
                     if (peek().type == TokenType::LeftBracket) {
                         consume();
@@ -495,8 +565,7 @@ auto Parser::parseProjectDecl() -> std::unique_ptr<ProjectNode> {
                         node->addArchitecture(archVal);
                     }
                 }
-            }
-            else if (keyType == TokenType::Entry || keyStr == "entry") {
+            } else if (keyType == TokenType::Entry || keyStr == "entry") {
                 if (expect(TokenType::Assign)) {
                     if (peek().type == TokenType::Identifier) {
                         node->setEntryPoint(consume().str);
@@ -504,8 +573,7 @@ auto Parser::parseProjectDecl() -> std::unique_ptr<ProjectNode> {
                         reportError(peek(), "Expected valid function identifier for project entry point.");
                     }
                 }
-            }
-            else if (keyType == TokenType::Format || keyStr == "format") {
+            } else if (keyType == TokenType::Format || keyStr == "format") {
                 if (expect(TokenType::Assign)) {
                     if (peek().type == TokenType::String_Literal || peek().type == TokenType::Identifier) {
                         std::string_view formatValue = consume().str;
@@ -517,8 +585,7 @@ auto Parser::parseProjectDecl() -> std::unique_ptr<ProjectNode> {
                         reportError(peek(), "Expected string literal or identifier for 'format' key.");
                     }
                 }
-            }
-            else {
+            } else {
                 reportError(keyToken, std::format("Unknown project configuration key '{}'", keyStr));
                 if (!isAtEnd() && peek().type != TokenType::Semicolon) {
                     consume();
@@ -540,7 +607,7 @@ auto Parser::parseProjectDecl() -> std::unique_ptr<ProjectNode> {
 
 auto Parser::parseStatement() -> std::unique_ptr<BaseNode> {
     if (isAtEnd()) return nullptr;
-    
+
     if (peek().type == TokenType::Return) {
         const TokenEntry& returnToken = peek();
         consume();
@@ -593,10 +660,10 @@ auto Parser::parseStatement() -> std::unique_ptr<BaseNode> {
 
 auto Parser::parseBlock() -> std::unique_ptr<BlockNode> {
     if (!expect(TokenType::LeftBrace)) return nullptr;
-    
-    enterAnonymousScope();                
+
+    enterAnonymousScope();
     auto blockNode = std::make_unique<BlockNode>();
-    
+
     while (peek().type != TokenType::RightBrace && !isAtEnd()) {
         auto stmt = parseStatement();
         if (stmt) {
@@ -605,15 +672,41 @@ auto Parser::parseBlock() -> std::unique_ptr<BlockNode> {
             synchronize();
         }
     }
-    
-    exitScope();                  
-    expect(TokenType::RightBrace); 
+
+    exitScope();
+    expect(TokenType::RightBrace);
     return blockNode;
 }
 
-auto Parser::parseVariableDecl() -> std::unique_ptr<VariableNode> {
-    bool isCStyle = (m_activeProject && m_activeProject->isRuleEnabled(allow_c_style_decl) && 
-                     TokenUtils::isTypedef(peek().type) && 
+auto Parser::parseTypeSpecifier(TokenType& outElementType, bool& outIsArray, size_t& outArraySize) -> bool {
+    outIsArray = false;
+    outArraySize = 0;
+
+    if (TokenUtils::isTypedef(peek().type)) {
+        outElementType = consume().type;
+    } else if (peek().type == TokenType::Identifier) {
+        SymbolInfo* info = lookup(consume().str);
+        if (info) outElementType = info->type;
+        else outElementType = TokenType::AutoWild;
+    } else {
+        return false;
+    }
+
+    if (peek().type == TokenType::LeftBracket) {
+        consume();
+        outIsArray = true;
+        if (peek().type == TokenType::Int_Literal) {
+            outArraySize = std::stoull(std::string(consume().str));
+        }
+        expect(TokenType::RightBracket);
+    }
+
+    return true;
+}
+
+auto Parser::parseVariableDecl() -> std::unique_ptr<BaseNode> {
+    bool isCStyle = (m_activeProject && m_activeProject->isRuleEnabled(allow_c_style_decl) &&
+                     TokenUtils::isTypedef(peek().type) &&
                      peekNext().type == TokenType::Identifier);
 
     if (isCStyle) {
@@ -626,30 +719,33 @@ auto Parser::parseVariableDecl() -> std::unique_ptr<VariableNode> {
             return nullptr;
         }
 
-        define(name, deducedType);
+        bool hasInitializer = (peek().type == TokenType::Assign);
+        define(name, deducedType, hasInitializer);
+
         auto varNode = std::make_unique<VariableNode>(std::string(name));
         varNode->setDeclaredType(deducedType);
-        
-        if (peek().type == TokenType::Assign) {
+
+        if (hasInitializer) {
             consume();
             varNode->setValue(parseExpression());
         }
-        
+
         expect(TokenType::Semicolon);
         return varNode;
-    } 
-    
+    }
+
     if (expect(TokenType::Let)) {
+        const TokenEntry& letToken = peek();
         if (m_activeProject && m_activeProject->isRuleEnabled(decline_vulpine_style_decl)) {
             reportError(peek(), "Vulpine-style 'let' declarations are disabled by project ruleset.");
             return nullptr;
         }
-        
+
         if (peek().type != TokenType::Identifier) {
             reportError(peek(), "Expected identifier after 'let' keyword.");
             return nullptr;
         }
-        
+
         std::string_view name = consume().str;
 
         SymbolInfo* check = lookup(name);
@@ -658,35 +754,71 @@ auto Parser::parseVariableDecl() -> std::unique_ptr<VariableNode> {
             return nullptr;
         }
 
-        TokenType deducedType = TokenType::AutoWild;
+        TokenType elementType = TokenType::AutoWild;
+        bool isArray = false;
+        size_t arraySize = 0;
+        bool hasTypeAnnotation = false;
 
-        // Optional type annotation: : type
         if (peek().type == TokenType::Colon) {
-            consume(); // consume ':'
-            if (TokenUtils::isTypedef(peek().type)) {
-                deducedType = consume().type;
-            } else if (peek().type == TokenType::Identifier) {
-                SymbolInfo* info = lookup(consume().str);
-                if (info) deducedType = info->type;
-            } else {
+            consume();
+            hasTypeAnnotation = true;
+            if (!parseTypeSpecifier(elementType, isArray, arraySize)) {
                 reportError(peek(), "Expected valid type after ':' in variable declaration.");
             }
         }
-        
-        define(name, deducedType);
-        auto varNode = std::make_unique<VariableNode>(std::string(name));
-        varNode->setDeclaredType(deducedType);
 
-        // Optional initializer assignment: = expression
-        if (peek().type == TokenType::Assign) {
-            consume(); // consume '='
-            varNode->setValue(parseExpression());
+        std::unique_ptr<BaseNode> initializerNode = nullptr;
+
+        if (peek().type == TokenType::LeftBrace) {
+            consume();
+            auto initExpr = parseExpression();
+            expect(TokenType::RightBrace);
+            initializerNode = std::move(initExpr);
+        } else if (peek().type == TokenType::Assign) {
+            consume();
+            initializerNode = parseExpression();
+        }
+
+        if (hasTypeAnnotation && initializerNode) {
+            bool valueIsArrayNode = (dynamic_cast<ArrayNode*>(initializerNode.get()) != nullptr);
+            if (!isArray && valueIsArrayNode) {
+                reportWarning(letToken, std::format("Ambiguity in declaration for '{}': Type specifies single scalar '{}' but assigned an array initializer.", name, TokenToString.at(elementType)));
+            }
+        }
+
+        bool isInitialized = (initializerNode != nullptr);
+        define(name, elementType, isInitialized);
+
+        if (isArray) {
+            auto arrNode = std::make_unique<ArrayNode>();
+            arrNode->setArrayName(std::string(name));
+            arrNode->setDeclaredType(elementType);
+            arrNode->setElementCount(arraySize);
+
+            if (initializerNode) {
+                if (auto* parsedArr = dynamic_cast<ArrayNode*>(initializerNode.get())) {
+                    for (auto& val : parsedArr->moveValues()) {
+                        arrNode->addValue(std::move(val));
+                    }
+                } else {
+                    arrNode->addValue(std::move(initializerNode));
+                }
+            }
+
+            expect(TokenType::Semicolon);
+            return arrNode;
+        }
+
+        auto varNode = std::make_unique<VariableNode>(std::string(name));
+        varNode->setDeclaredType(elementType);
+        if (initializerNode) {
+            varNode->setValue(std::move(initializerNode));
         }
 
         expect(TokenType::Semicolon);
         return varNode;
     }
-    
+
     reportError(peek(), std::format("Unexpected statement starting with '{}'", peek().str));
     consume();
     return nullptr;
@@ -753,7 +885,7 @@ auto Parser::parseFunctionDecl() -> std::unique_ptr<BaseNode> {
     }
 
     std::string_view fnName = consume().str;
-    define(fnName, TokenType::Fn);
+    define(fnName, TokenType::Fn, true);
 
     auto funcNode = std::make_unique<FunctionNode>();
     funcNode->setName(std::string(fnName));
@@ -763,7 +895,7 @@ auto Parser::parseFunctionDecl() -> std::unique_ptr<BaseNode> {
         exitScope();
         return nullptr;
     }
-    
+
     while (!isAtEnd() && peek().type != TokenType::RightParentheses) {
         bool paramCopy = false;
         bool paramConst = false;
@@ -784,7 +916,7 @@ auto Parser::parseFunctionDecl() -> std::unique_ptr<BaseNode> {
                 }
             }
 
-            define(paramName, paramType);
+            define(paramName, paramType, true);
             auto paramNode = std::make_unique<VariableNode>(std::string(paramName));
             paramNode->setDeclaredType(paramType);
             paramNode->setParameterCopy(paramCopy);

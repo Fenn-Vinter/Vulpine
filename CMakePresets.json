@@ -27,7 +27,14 @@
         "lhs": "${hostSystemName}",
         "rhs": "Windows"
       },
+      "environment": {
+        "PATH": "C:/msys64/ucrt64/bin;$penv{PATH}"
+      },
       "cacheVariables": {
+        "CMAKE_C_COMPILER": "C:/msys64/ucrt64/bin/gcc.exe",
+        "CMAKE_CXX_COMPILER": "C:/msys64/ucrt64/bin/g++.exe",
+        "CMAKE_MAKE_PROGRAM": "C:/msys64/ucrt64/bin/ninja.exe",
+        "CMAKE_PREFIX_PATH": "C:/msys64/ucrt64",
         "LLVM_DIR": "C:/msys64/ucrt64/lib/cmake/llvm",
         "MLIR_DIR": "C:/msys64/ucrt64/lib/cmake/mlir",
         "CMAKE_BUILD_TYPE": "Release",

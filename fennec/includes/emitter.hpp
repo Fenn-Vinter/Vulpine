@@ -48,4 +48,8 @@ private:
     auto emit_variable(const VariableNode* node) -> llvm::Value*;
 
     auto vulpine_type_to_llvm_type(TokenType type) -> llvm::Type*;
+
+    auto emit_index_access(const IndexAccessNode* node) -> llvm::Value*;
+
+    auto emit_array(const ArrayNode* node) -> llvm::Value*;
 };

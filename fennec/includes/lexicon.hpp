@@ -38,10 +38,6 @@
     X(Double, "double") \
     X(F128, "f128")
 
-#define STRING_LIST \
-    X(String, "string") \
-    X(Char, "char")
-
 #define BOOL_LIST \
     X(Bool, "bool") \
     X(True, "true") \
@@ -52,8 +48,8 @@
     UINT_LIST \
     WILDCARD_LIST \
     FLOAT_LIST \
-    STRING_LIST \
     BOOL_LIST \
+    X(Char, "char") \
     X(Byte, "byte") \
     X(Bit, "bit") \
 
@@ -238,7 +234,7 @@ namespace TokenUtils {
     }
 
     inline auto isTypedef(TokenType t) -> bool {
-        return (isWildcard(t) || isFloat(t) || isUInt(t) || isInt(t) || t == TokenType::Bool || t == TokenType::String || t == TokenType::Char || t == TokenType::Nullptr);
+        return (isWildcard(t) || isFloat(t) || isUInt(t) || isInt(t) || t == TokenType::Bool || t == TokenType::Char || t == TokenType::Nullptr);
     }
 
     inline auto isNumericType(TokenType t) -> bool {

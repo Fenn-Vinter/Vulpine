@@ -35,8 +35,7 @@ emitter::~emitter() = default;
 
 auto emitter::vulpine_type_to_llvm_type(TokenType type) -> llvm::Type* {
     switch (type) {
-        case TokenType::Nullptr: 
-        case TokenType::String:
+        case TokenType::Nullptr:
         case TokenType::String_Literal:
             return llvm::PointerType::get(context, 0);
 
@@ -136,6 +135,34 @@ auto emitter::emit_variable(const VariableNode* node) -> llvm::Value* {
     return alloc;
 }
 
+auto emitter::emit_array(const ArrayNode* node) -> llvm::Value* {
+    llvm::Type* elemType = vulpine_type_to_llvm_type(node->getDeclaredType());
+    if (!elemType) elemType = llvm::Type::getInt32Ty(context);
+
+    size_t count = node->getValues().size();
+    if (node->getElementCount() > count) {
+        count = node->getElementCount();
+    }
+
+    llvm::ArrayType* arrType = llvm::ArrayType::get(elemType, count);
+    llvm::AllocaInst* alloc = builder.CreateAlloca(arrType, nullptr, node->getArrayName());
+    namedValues[node->getArrayName()] = alloc;
+
+    size_t idx = 0;
+    for (const auto& valExpr : node->getValues()) {
+        llvm::Value* val = emit_node(valExpr.get());
+        if (val) {
+            llvm::Value* zero = builder.getInt32(0);
+            llvm::Value* index = builder.getInt32(idx);
+            llvm::Value* gep = builder.CreateGEP(arrType, alloc, {zero, index}, "arr_init_gep");
+            builder.CreateStore(val, gep);
+        }
+        idx++;
+    }
+
+    return alloc;
+}
+
 auto emitter::emit_literal(const LiteralNode* lit) -> llvm::Value* {
     TokenType literalType = lit->getLiteralType();
     const std::string& value = lit->getValue();
@@ -151,7 +178,7 @@ auto emitter::emit_literal(const LiteralNode* lit) -> llvm::Value* {
         return llvm::ConstantInt::getFalse(context);
     }
 
-    if (literalType == TokenType::String || literalType == TokenType::String_Literal) {
+    if (literalType == TokenType::String_Literal) {
         return builder.CreateGlobalString(lit->getValue(), "str");
     }
 
@@ -308,11 +335,30 @@ auto emitter::emit_unary(const UnaryOpNode* node) -> llvm::Value* {
             return builder.CreateNot(boolValue, "nottmp");
         }
         case TokenType::Address: {
-            auto* varRef = dynamic_cast<const VariableRefNode*>(node->getOperand());
-            if (!varRef) return nullptr;
-            auto it = namedValues.find(std::string(varRef->getName()));
-            if (it == namedValues.end()) return nullptr;
-            return it->second; // Returns alloca memory pointer
+            if (auto* varRef = dynamic_cast<const VariableRefNode*>(node->getOperand())) {
+                auto it = namedValues.find(std::string(varRef->getName()));
+                if (it == namedValues.end()) return nullptr;
+                return it->second;
+            }
+
+            if (auto* indexAccess = dynamic_cast<const IndexAccessNode*>(node->getOperand())) {
+                llvm::Value* targetVal = nullptr;
+                if (auto* varRef = dynamic_cast<const VariableRefNode*>(indexAccess->getTarget())) {
+                    auto it = namedValues.find(std::string(varRef->getName()));
+                    if (it != namedValues.end()) targetVal = it->second;
+                }
+
+                llvm::Value* indexVal = emit_node(indexAccess->getIndex());
+                llvm::Type* elemType = vulpine_type_to_llvm_type(indexAccess->getType());
+                if (!elemType) elemType = llvm::Type::getInt32Ty(context);
+
+                if (auto* alloc = llvm::dyn_cast<llvm::AllocaInst>(targetVal)) {
+                    llvm::Value* zero = builder.getInt32(0);
+                    return builder.CreateGEP(alloc->getAllocatedType(), targetVal, {zero, indexVal}, "addrgep");
+                }
+                return builder.CreateGEP(elemType, targetVal, indexVal, "addrgep");
+            }
+            return nullptr;
         }
         case TokenType::Deref: {
             llvm::Value* operand = emit_node(node->getOperand());
@@ -329,6 +375,37 @@ auto emitter::emit_unary(const UnaryOpNode* node) -> llvm::Value* {
     }
 }
 
+auto emitter::emit_index_access(const IndexAccessNode* node) -> llvm::Value* {
+    llvm::Value* targetVal = nullptr;
+
+    if (auto* varRef = dynamic_cast<const VariableRefNode*>(node->getTarget())) {
+        auto it = namedValues.find(std::string(varRef->getName()));
+        if (it != namedValues.end()) {
+            targetVal = it->second;
+        }
+    } else {
+        targetVal = emit_node(node->getTarget());
+    }
+
+    llvm::Value* indexVal = emit_node(node->getIndex());
+    if (!targetVal || !indexVal) return nullptr;
+
+    llvm::Type* elemType = vulpine_type_to_llvm_type(node->getType());
+    if (!elemType) {
+        elemType = llvm::Type::getInt32Ty(context);
+    }
+
+    llvm::Value* gep = nullptr;
+    if (auto* alloc = llvm::dyn_cast<llvm::AllocaInst>(targetVal)) {
+        llvm::Value* zero = builder.getInt32(0);
+        gep = builder.CreateGEP(alloc->getAllocatedType(), targetVal, {zero, indexVal}, "arraygep");
+    } else {
+        gep = builder.CreateGEP(elemType, targetVal, indexVal, "arraygep");
+    }
+
+    return builder.CreateLoad(elemType, gep, "arrayval");
+}
+
 auto emitter::emit_node(const BaseNode* node) -> llvm::Value* {
     if (!node) return nullptr;
 
@@ -339,6 +416,14 @@ auto emitter::emit_node(const BaseNode* node) -> llvm::Value* {
 
         case NodeType::Variable: {
             return emit_variable(static_cast<const VariableNode*>(node));
+        }
+
+        case NodeType::Array: {
+            return emit_array(static_cast<const ArrayNode*>(node));
+        }
+
+        case NodeType::IndexAccess: {
+            return emit_index_access(static_cast<const IndexAccessNode*>(node));
         }
 
         case NodeType::VariableRef: {
@@ -414,13 +499,35 @@ auto emitter::emit_node(const BaseNode* node) -> llvm::Value* {
                 case TokenType::Multiply_Assign:
                 case TokenType::Divide_Assign:
                 case TokenType::Modulo_Assign: {
-                    auto* leftRef = dynamic_cast<const VariableRefNode*>(bin->getLeft());
-                    if (!leftRef) return nullptr;
+                    llvm::Value* ptr = nullptr;
 
-                    auto it = namedValues.find(std::string(leftRef->getName()));
-                    if (it == namedValues.end()) return nullptr;
+                    if (auto* leftRef = dynamic_cast<const VariableRefNode*>(bin->getLeft())) {
+                        auto it = namedValues.find(std::string(leftRef->getName()));
+                        if (it != namedValues.end()) {
+                            ptr = it->second;
+                        }
+                    } else if (auto* indexAccess = dynamic_cast<const IndexAccessNode*>(bin->getLeft())) {
+                        llvm::Value* targetVal = nullptr;
+                        if (auto* varRef = dynamic_cast<const VariableRefNode*>(indexAccess->getTarget())) {
+                            auto it = namedValues.find(std::string(varRef->getName()));
+                            if (it != namedValues.end()) targetVal = it->second;
+                        }
+                        llvm::Value* indexVal = emit_node(indexAccess->getIndex());
+                        if (targetVal && indexVal) {
+                            llvm::Type* elemType = vulpine_type_to_llvm_type(indexAccess->getType());
+                            if (!elemType) {
+                                elemType = llvm::Type::getInt32Ty(context);
+                            }
+                            if (auto* alloc = llvm::dyn_cast<llvm::AllocaInst>(targetVal)) {
+                                llvm::Value* zero = builder.getInt32(0);
+                                ptr = builder.CreateGEP(alloc->getAllocatedType(), targetVal, {zero, indexVal}, "arraygep");
+                            } else {
+                                ptr = builder.CreateGEP(elemType, targetVal, indexVal, "arraygep");
+                            }
+                        }
+                    }
 
-                    llvm::Value* ptr = it->second;
+                    if (!ptr) return nullptr;
 
                     llvm::Type* valueType = nullptr;
                     if (auto* alloc = llvm::dyn_cast<llvm::AllocaInst>(ptr)) {
@@ -466,8 +573,6 @@ auto emitter::emit_node(const BaseNode* node) -> llvm::Value* {
 
                     if (ptr->getType()->isPointerTy()) {
                         builder.CreateStore(result, ptr);
-                    } else {
-                        namedValues[std::string(leftRef->getName())] = result;
                     }
 
                     return result;
@@ -608,13 +713,11 @@ static auto get_target_machine(bool isWindowsTarget) -> std::unique_ptr<llvm::Ta
         ? "x86_64-w64-mingw32" 
         : llvm::sys::getDefaultTargetTriple();
 
-    // Construct the Triple explicitly
     llvm::Triple triple(targetTripleStr);
 
     std::error_code ec;
     std::string error;
     
-    // Pass the explicit Triple object instead of targetTripleStr
     const llvm::Target* target = llvm::TargetRegistry::lookupTarget(triple, error);
     if (!target) {
         llvm::errs() << "Target lookup failed: " << error << "\n";
@@ -625,7 +728,6 @@ static auto get_target_machine(bool isWindowsTarget) -> std::unique_ptr<llvm::Ta
     auto cpu = "generic";
     auto features = "";
 
-    // Pass triple.str() or the explicit triple object
     return std::unique_ptr<llvm::TargetMachine>(
         target->createTargetMachine(
             triple, 
